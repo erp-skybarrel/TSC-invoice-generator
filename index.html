@@ -476,8 +476,11 @@ function allSkusInUse(){
 }
 
 /* ================= Cash movements ================= */
-const CASH_CATEGORIES = ['Sales (cash)','Owner capital','Loan received','Petty cash top-up','Other income',
-  'Supplier payment (cash)','Rent','Utilities','Salary/Wages','Transport/Delivery','Owner drawings','Bank fees','Other expense'];
+// Tracks all money movement, however it was paid — cash, bank transfer, cheque, or online —
+// not just physical cash. "Method" (below) records which one; the balance is their combined total.
+const CASH_CATEGORIES = ['Sales receipt','Owner capital','Loan received','Petty cash top-up','Other income',
+  'Supplier payment','Rent','Utilities','Salary/Wages','Transport/Delivery','Owner drawings','Bank fees','Other expense'];
+const PAYMENT_METHODS = ['Cash','Bank Transfer','Cheque','Online'];
 function cashMovementsSorted(){ return [...state.cashMovements].filter(m=>!m.voided).sort((a,b)=> b.date.localeCompare(a.date) || (b.createdAt-a.createdAt)); }
 function cashBalanceFor(currency){
   currency = currency || state.settings.currency;
@@ -642,7 +645,7 @@ function dashboardHTML(){
     <div class="stat-card"><div class="stat-label">Total Receivables (${base})</div><div class="stat-value receivable">${fmtMoney(totalRecv)}</div></div>
     <div class="stat-card"><div class="stat-label">Total Payables (${base})</div><div class="stat-value payable">${fmtMoney(totalPay)}</div></div>
     <div class="stat-card"><div class="stat-label">Overdue Invoices (${base})</div><div class="stat-value overdue">${fmtMoney(overdueTotal)}</div></div>
-    <div class="stat-card" style="cursor:pointer" data-nav="cash"><div class="stat-label">Cash Balance (${base})</div><div class="stat-value" style="color:${cashBalance<0?'var(--danger)':'var(--success)'}">${fmtMoney(cashBalance)}</div></div>
+    <div class="stat-card" style="cursor:pointer" data-nav="cash"><div class="stat-label">Cash & Bank Balance (${base})</div><div class="stat-value" style="color:${cashBalance<0?'var(--danger)':'var(--success)'}">${fmtMoney(cashBalance)}</div></div>
   </div>
   ${otherCcyDocs>0? `<div class="hint" style="margin-bottom:14px;">+ ${otherCcyDocs} document(s) in other currencies — see Statement of Account or Aging Report per party for those balances.</div>`:''}
   <div class="card">
@@ -849,25 +852,34 @@ function agingHTML(){
 }
 
 /* ---------- Cash Movement ---------- */
+let cashMethodFilter = 'all';
 function cashHTML(){
-  const rows = cashMovementsSorted();
+  let rows = cashMovementsSorted();
   const balances = cashBalancesByCurrency();
   const ccys = Object.keys(balances);
+  if(cashMethodFilter!=='all') rows = rows.filter(m=>(m.method||'Cash')===cashMethodFilter);
   return `
   <div class="stat-grid" style="grid-template-columns:repeat(${Math.max(ccys.length,1)},1fr);margin-bottom:16px;">
-    ${ccys.length===0 ? `<div class="stat-card"><div class="stat-label">Cash Balance</div><div class="stat-value">${fmtMoney(0)}</div></div>` :
-      ccys.map(c=>`<div class="stat-card"><div class="stat-label">Cash Balance (${c})</div><div class="stat-value" style="color:${balances[c]<0?'var(--danger)':'var(--success)'}">${fmtMoney(balances[c],c)}</div></div>`).join('')}
+    ${ccys.length===0 ? `<div class="stat-card"><div class="stat-label">Total Balance</div><div class="stat-value">${fmtMoney(0)}</div></div>` :
+      ccys.map(c=>`<div class="stat-card"><div class="stat-label">Total Balance (${c})</div><div class="stat-value" style="color:${balances[c]<0?'var(--danger)':'var(--success)'}">${fmtMoney(balances[c],c)}</div></div>`).join('')}
   </div>
   <div class="toolbar">
-    <div class="hint" style="margin:0;">Cash in/out not tied to a customer or supplier document — e.g. cash sales, petty cash, owner drawings, rent, salaries.</div>
-    <button class="btn btn-primary" id="newCashBtn">${icon('plus')} New cash entry</button>
+    <div class="filters">
+      <select id="fCashMethod">
+        <option value="all" ${cashMethodFilter==='all'?'selected':''}>All methods</option>
+        ${PAYMENT_METHODS.map(m=>`<option value="${m}" ${cashMethodFilter===m?'selected':''}>${m}</option>`).join('')}
+      </select>
+    </div>
+    <button class="btn btn-primary" id="newCashBtn">${icon('plus')} New entry</button>
   </div>
+  <div class="hint" style="margin:-8px 0 14px;">Tracks all money movement — cash, bank transfer, cheque, online — whether tied to an invoice/bill payment or a standalone entry like petty cash, rent or owner drawings.</div>
   <div class="card" style="padding:0;">
-    ${rows.length===0 ? emptyState('No cash movements yet','Record your first cash in or cash out entry.') : `
-    <div class="table-scroll"><table><thead><tr><th>Date</th><th>Direction</th><th>Category</th><th>Description</th><th class="num">Amount</th><th></th></tr></thead>
+    ${rows.length===0 ? emptyState('No entries found','Record a money-in or money-out entry, or adjust the filter above.') : `
+    <div class="table-scroll"><table><thead><tr><th>Date</th><th>Direction</th><th>Method</th><th>Category</th><th>Description</th><th class="num">Amount</th><th></th></tr></thead>
     <tbody>${rows.map(m=>`<tr>
       <td>${fmtDate(m.date)}</td>
-      <td><span class="badge ${m.direction==='in'?'badge-paid':'badge-overdue'}">${m.direction==='in'?'Cash in':'Cash out'}</span></td>
+      <td><span class="badge ${m.direction==='in'?'badge-paid':'badge-overdue'}">${m.direction==='in'?'In':'Out'}</span></td>
+      <td>${escapeHtml(m.method||'Cash')}</td>
       <td>${escapeHtml(m.category||'—')}</td>
       <td style="color:var(--text-soft)">${escapeHtml(m.description||'—')}</td>
       <td class="num" style="font-weight:600;color:${m.direction==='in'?'var(--success)':'var(--danger)'}">${m.direction==='in'?'+':'−'}${fmtMoney(m.amount, m.currency)}</td>
@@ -1343,11 +1355,20 @@ function openViewModal(id, kind){
       let number;
       try{ number = await getNextNumber(ptype); }
       catch(e){ btn.disabled = false; btn.textContent = 'Record'; return; }
+      const method = document.getElementById('pay_method').value;
       const pay = { id:uid(), type:ptype, number, date: document.getElementById('pay_date').value||todayStr(),
-        partyId: doc.partyId, amount: amt, currency: ccy, method: document.getElementById('pay_method').value, linkedDocId: doc.id, voided:false, createdAt:Date.now() };
+        partyId: doc.partyId, amount: amt, currency: ccy, method, linkedDocId: doc.id, voided:false, createdAt:Date.now() };
+      // Every payment/receipt — however it moved (cash, bank, cheque, online) — logs to Cash Movement too.
+      const cashEntry = { id:uid(), date: pay.date, direction: ptype==='RCT' ? 'in' : 'out',
+        category: ptype==='RCT' ? 'Sales receipt' : 'Supplier payment', method,
+        currency: ccy, description: `${pay.number} — ${partyName(doc.partyId)} (${doc.number})`,
+        amount: amt, voided:false, createdAt: Date.now(), linkedPaymentId: pay.id };
+      pay.linkedCashId = cashEntry.id;
+      state.cashMovements.push(cashEntry);
       state.payments.push(pay);
-      await savePayments();
-      toast(`${pay.number} recorded`); closeModal(); render();
+      await Promise.all([savePayments(), saveCash()]);
+      toast(`${pay.number} recorded — cash movement updated`);
+      closeModal(); render();
     };
   }
 }
@@ -1376,6 +1397,7 @@ function openPaymentDetail(id){
       <div class="field"><label>Amount</label><div style="font-weight:700">${fmtMoney(p.amount, p.currency)}</div></div>
       <div class="field"><label>Method</label><div>${p.method}</div></div>
       ${p.linkedDocId? `<div class="field"><label>Linked document</label><div>${(state.documents.find(d=>d.id===p.linkedDocId)||{}).number||'—'}</div></div>`:''}
+      ${p.linkedCashId? `<div class="hint">This also recorded a Cash Movement entry — voiding it will void that too.</div>`:''}
     </div>
     <div class="modal-foot">
       <button class="btn btn-danger" id="voidPayBtn" style="margin-right:auto">${p.voided?'Restore':'Void'}</button>
@@ -1385,7 +1407,16 @@ function openPaymentDetail(id){
   injectModal(html);
   document.getElementById('closePayDetail').onclick = closeModal;
   document.getElementById('donePayBtn').onclick = closeModal;
-  document.getElementById('voidPayBtn').onclick = async ()=>{ p.voided=!p.voided; await savePayments(); toast(p.voided?'Voided':'Restored'); closeModal(); render(); };
+  document.getElementById('voidPayBtn').onclick = async ()=>{
+    p.voided = !p.voided;
+    const jobs = [savePayments()];
+    if(p.linkedCashId){
+      const cm = state.cashMovements.find(c=>c.id===p.linkedCashId);
+      if(cm){ cm.voided = p.voided; jobs.push(saveCash()); }
+    }
+    await Promise.all(jobs);
+    toast(p.voided?'Voided':'Restored'); closeModal(); render();
+  };
 }
 
 /* ================= Cash movement modal ================= */
@@ -1394,7 +1425,8 @@ function openCashModal(){
     <div class="modal-head"><div class="modal-title">New cash entry</div><button class="icon-btn" id="closeCashModal">${icon('x')}</button></div>
     <div class="modal-body">
       <div class="row">
-        <div class="field"><label>Direction</label><select id="cash_dir"><option value="in">Cash in</option><option value="out">Cash out</option></select></div>
+        <div class="field"><label>Direction</label><select id="cash_dir"><option value="in">Money in</option><option value="out">Money out</option></select></div>
+        <div class="field"><label>Method</label><select id="cash_method">${PAYMENT_METHODS.map(m=>`<option value="${m}">${m}</option>`).join('')}</select></div>
         <div class="field"><label>Date</label><input id="cash_date" type="date" value="${todayStr()}"></div>
       </div>
       <div class="row">
@@ -1418,13 +1450,14 @@ function openCashModal(){
       id: uid(), date: document.getElementById('cash_date').value || todayStr(),
       direction: document.getElementById('cash_dir').value,
       category: document.getElementById('cash_category').value,
+      method: document.getElementById('cash_method').value,
       currency: document.getElementById('cash_currency').value,
       description: document.getElementById('cash_desc').value,
       amount, voided:false, createdAt: Date.now(),
     };
     state.cashMovements.push(entry);
     await saveCash();
-    toast('Cash entry saved'); closeModal(); render();
+    toast('Entry saved'); closeModal(); render();
   };
 }
 
@@ -1722,6 +1755,7 @@ function attachGlobalHandlers(){
   const fStatus=document.getElementById('fStatus'); if(fStatus) fStatus.onchange=e=>{docFilter.status=e.target.value; render();};
   const fSearch=document.getElementById('fSearch'); if(fSearch){ fSearch.oninput=e=>{docFilter.q=e.target.value; render(); }; }
   const fPartyType=document.getElementById('fPartyType'); if(fPartyType) fPartyType.onchange=e=>{partyFilter=e.target.value; render();};
+  const fCashMethod=document.getElementById('fCashMethod'); if(fCashMethod) fCashMethod.onchange=e=>{cashMethodFilter=e.target.value; render();};
 
   const soaSel = document.getElementById('soaPartySelect'); if(soaSel) soaSel.onchange=e=>nav('soa',{partyId:e.target.value});
   const printSoaBtn = document.getElementById('printSoaBtn'); if(printSoaBtn) printSoaBtn.onclick=()=>printSOA(route.params.partyId || state.parties[0].id);
