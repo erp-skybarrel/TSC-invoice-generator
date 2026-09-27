@@ -44,14 +44,29 @@
   .nav-item.active svg{opacity:1;}
   .sidebar-foot{margin-top:auto;padding:10px;font-size:11px;color:var(--text-faint);}
 
-  #main{flex:1;overflow-y:auto;position:relative;}
+  #main{flex:1;overflow-y:auto;position:relative;min-width:0;}
   .topbar{
     position:sticky;top:0;z-index:5;background:rgba(250,251,251,0.85);backdrop-filter:blur(8px);
-    border-bottom:1px solid var(--border-soft); padding:16px 32px;display:flex;align-items:center;justify-content:space-between;
+    border-bottom:1px solid var(--border-soft); padding:16px 32px;display:flex;align-items:center;justify-content:space-between;gap:10px;
   }
+  .topbar-left{display:flex;align-items:center;gap:10px;min-width:0;}
   .page-title{font-size:19px;font-weight:650;letter-spacing:-0.015em;}
   .page-sub{font-size:12.5px;color:var(--text-soft);margin-top:2px;}
   .content{padding:24px 32px 60px;max-width:1220px;}
+  .hamburger-btn{display:none;flex:none;border:1px solid var(--border);background:var(--surface);border-radius:var(--radius-sm);padding:7px 9px;}
+  .hamburger-btn svg{width:18px;height:18px;display:block;}
+  .sidebar-backdrop{position:fixed;inset:0;background:rgba(20,20,22,0.4);z-index:35;opacity:0;pointer-events:none;transition:opacity .2s;}
+  .sidebar-backdrop.show{opacity:1;pointer-events:auto;}
+
+  @media (max-width: 860px){
+    .hamburger-btn{display:inline-flex;align-items:center;justify-content:center;}
+    #sidebar{position:fixed;top:0;left:0;height:100vh;z-index:40;transform:translateX(-100%);transition:transform .22s ease;box-shadow:0 0 30px rgba(0,0,0,0.15);}
+    #sidebar.open{transform:translateX(0);}
+    .topbar{padding:12px 16px;}
+    .content{padding:16px 16px 60px;}
+    .stat-grid{grid-template-columns:repeat(2,1fr);}
+    .page-title{font-size:17px;}
+  }
 
   button{font-family:inherit;cursor:pointer;}
   .btn{
@@ -236,7 +251,7 @@
    Fill these in with your own Supabase project's values (Project Settings → API).
    SUPABASE_ANON_KEY is safe to expose in client-side code — it's the public key,
    access is controlled by Row Level Security policies on the table, not by hiding this key. */
-const SUPABASE_URL = "https://rxeclgzywxpoegadrnik.supabase.co";        // e.g. "https://abcdefgh.supabase.co"
+   const SUPABASE_URL = "https://rxeclgzywxpoegadrnik.supabase.co";        // e.g. "https://abcdefgh.supabase.co"
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ4ZWNsZ3p5d3hwb2VnYWRybmlrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA1MTY1MTksImV4cCI6MjEwNjA5MjUxOX0.hHzGh-dX_vFbz9th_Ayoq3KqVHkzdKlymL8xKvEiMjY"; // e.g. "eyJhbGciOi..."
 const SUPABASE_CONFIGURED = !SUPABASE_URL.includes('YOUR_SUPABASE') && !SUPABASE_ANON_KEY.includes('YOUR_SUPABASE');
 const sb = SUPABASE_CONFIGURED ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
@@ -287,7 +302,7 @@ const DOC_LABELS = { QT:'Quotation', PO:'Purchase Order', DO:'Delivery Order', I
 const MONEY_DOC_TYPES = ['INV','CN','DN','PINV']; // QT, PO, DO are non-monetary / pre-conversion documents
 
 /* ================= State & storage ================= */
-let state = { settings:null, parties:[], documents:[], payments:[], stockMovements:[], recurring:[], counterPreview:{}, loaded:false };
+let state = { settings:null, parties:[], documents:[], payments:[], stockMovements:[], recurring:[], cashMovements:[], counterPreview:{}, loaded:false };
 
 async function dbGet(key){
   try{
@@ -303,8 +318,8 @@ async function dbSet(key, value){
   }catch(e){ console.error('dbSet', key, e); toast('Could not save — check your connection'); }
 }
 async function loadAll(){
-  const [s,p,d,pay,sm,rc] = await Promise.all([
-    dbGet('settings'), dbGet('parties'), dbGet('documents'), dbGet('payments'), dbGet('stockMovements'), dbGet('recurring')
+  const [s,p,d,pay,sm,rc,cm] = await Promise.all([
+    dbGet('settings'), dbGet('parties'), dbGet('documents'), dbGet('payments'), dbGet('stockMovements'), dbGet('recurring'), dbGet('cashMovements')
   ]);
   state.settings = s ? deepMerge(JSON.parse(JSON.stringify(DEFAULT_SETTINGS)), s) : JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
   state.parties = p || [];
@@ -312,6 +327,7 @@ async function loadAll(){
   state.payments = pay || [];
   state.stockMovements = sm || [];
   state.recurring = rc || [];
+  state.cashMovements = cm || [];
   state.loaded = true;
 }
 function deepMerge(base, override){
@@ -329,6 +345,7 @@ async function saveDocuments(){ await dbSet('documents', state.documents); }
 async function savePayments(){ await dbSet('payments', state.payments); }
 async function saveStock(){ await dbSet('stockMovements', state.stockMovements); }
 async function saveRecurring(){ await dbSet('recurring', state.recurring); }
+async function saveCash(){ await dbSet('cashMovements', state.cashMovements); }
 
 function uid(){ return Math.random().toString(36).slice(2,10) + Date.now().toString(36).slice(-4); }
 function todayStr(){ return new Date().toISOString().slice(0,10); }
@@ -458,18 +475,39 @@ function allSkusInUse(){
   return [...set.values()];
 }
 
-// Ledger effect per currency: positive = increases what party owes company (receivable) or what company owes party (payable)
-function ledgerRows(partyId){
+/* ================= Cash movements ================= */
+const CASH_CATEGORIES = ['Sales (cash)','Owner capital','Loan received','Petty cash top-up','Other income',
+  'Supplier payment (cash)','Rent','Utilities','Salary/Wages','Transport/Delivery','Owner drawings','Bank fees','Other expense'];
+function cashMovementsSorted(){ return [...state.cashMovements].filter(m=>!m.voided).sort((a,b)=> b.date.localeCompare(a.date) || (b.createdAt-a.createdAt)); }
+function cashBalanceFor(currency){
+  currency = currency || state.settings.currency;
+  return state.cashMovements.filter(m=>!m.voided && (m.currency||state.settings.currency)===currency)
+    .reduce((s,m)=> s + (m.direction==='in' ? Number(m.amount) : -Number(m.amount)), 0);
+}
+function cashBalancesByCurrency(){
+  const ccys = [...new Set(state.cashMovements.filter(m=>!m.voided).map(m=>m.currency||state.settings.currency))];
+  const out = {};
+  ccys.forEach(c=>{ out[c] = cashBalanceFor(c); });
+  return out;
+}
+
+// Receivables (AR) and payables (AP) are kept as two fully separate ledgers, even for a
+// party that is both your customer and your supplier — an invoice you sent them and a bill
+// they sent you are two different obligations and must never net against each other.
+const AR_DOC_TYPES = ['INV','DN','CN'];
+const AP_DOC_TYPES = ['PINV'];
+function ledgerRows(partyId, kind){
+  const docTypes = kind==='AP' ? AP_DOC_TYPES : AR_DOC_TYPES;
+  const paymentType = kind==='AP' ? 'PMT' : 'RCT';
   const rows = [];
-  state.documents.filter(d=>d.partyId===partyId && MONEY_DOC_TYPES.includes(d.type) && !d.voided).forEach(d=>{
+  state.documents.filter(d=>d.partyId===partyId && docTypes.includes(d.type) && !d.voided).forEach(d=>{
     const {total} = docTotals(d);
     let effect = 0;
-    if(d.type==='INV' || d.type==='DN') effect = total;
+    if(d.type==='INV' || d.type==='DN' || d.type==='PINV') effect = total;
     else if(d.type==='CN') effect = -total;
-    else if(d.type==='PINV') effect = total;
     rows.push({ date:d.date, ref:d.number, desc:DOC_LABELS[d.type], currency:docCurrency(d), debit: effect>0?effect:0, credit: effect<0?-effect:0 });
   });
-  state.payments.filter(p=>p.partyId===partyId && !p.voided).forEach(p=>{
+  state.payments.filter(p=>p.partyId===partyId && p.type===paymentType && !p.voided).forEach(p=>{
     rows.push({ date:p.date, ref:p.number, desc: p.type==='RCT'?'Receipt':'Payment', currency:p.currency||state.settings.currency, debit:0, credit:Number(p.amount) });
   });
   rows.sort((a,b)=> a.date.localeCompare(b.date));
@@ -477,25 +515,26 @@ function ledgerRows(partyId){
   rows.forEach(r=>{ runningByCcy[r.currency] = (runningByCcy[r.currency]||0) + r.debit - r.credit; r.balance = runningByCcy[r.currency]; });
   return rows;
 }
-function ledgerRowsByCurrency(partyId){
-  const rows = ledgerRows(partyId);
+function ledgerRowsByCurrency(partyId, kind){
+  const rows = ledgerRows(partyId, kind);
   const grouped = {};
   rows.forEach(r=>{ (grouped[r.currency] = grouped[r.currency]||[]).push(r); });
   return grouped;
 }
-function partyBalance(partyId, currency){
+function partyBalance(partyId, kind, currency){
   currency = currency || state.settings.currency;
-  const rows = ledgerRows(partyId).filter(r=>r.currency===currency);
+  const rows = ledgerRows(partyId, kind).filter(r=>r.currency===currency);
   return rows.length ? rows[rows.length-1].balance : 0;
 }
 
 /* ================= Router ================= */
 let route = { page: 'dashboard', params:{} };
-function nav(page, params={}){ route = {page, params}; render(); if(page==='settings') refreshCounterPreviews(); }
+let sidebarOpen = false;
+function nav(page, params={}){ route = {page, params}; sidebarOpen = false; render(); if(page==='settings') refreshCounterPreviews(); }
 
 function render(){
   const app = document.getElementById('app');
-  app.innerHTML = `${sidebarHTML()}<div id="main">${topbarHTML()}<div class="content">${pageHTML()}</div></div>`;
+  app.innerHTML = `${sidebarHTML()}<div class="sidebar-backdrop ${sidebarOpen?'show':''}" id="sidebarBackdrop"></div><div id="main">${topbarHTML()}<div class="content">${pageHTML()}</div></div>`;
   attachGlobalHandlers();
 }
 
@@ -506,12 +545,13 @@ function sidebarHTML(){
     {key:'parties', label:'Customers & Suppliers', icon:icon('users')},
     {key:'soa', label:'Statement of Account', icon:icon('list')},
     {key:'aging', label:'Aging Report', icon:icon('clock')},
+    {key:'cash', label:'Cash Movement', icon:icon('cash')},
     {key:'stock', label:'Stock', icon:icon('box')},
     {key:'recurring', label:'Recurring Invoices', icon:icon('repeat')},
     {key:'settings', label:'Settings', icon:icon('gear')},
   ];
   return `
-  <div id="sidebar">
+  <div id="sidebar" class="${sidebarOpen?'open':''}">
     <div class="brand"><div class="brand-mark">${(state.settings.companyName||'C').slice(0,1)}</div><div class="brand-name">${escapeHtml(state.settings.companyName)}</div></div>
     <div class="nav-group">
       <div class="nav-label">Workspace</div>
@@ -541,6 +581,8 @@ function icon(name){
     mail:'<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 6l10 7 10-7"/>',
     whatsapp:'<path d="M20 12a8 8 0 11-3.8-6.8"/><path d="M20 12l-4-1"/>',
     search:'<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
+    cash:'<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M6 10v.01M18 14v.01"/>',
+    menu:'<path d="M3 6h18M3 12h18M3 18h18"/>',
   };
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths[name]||''}</svg>`;
 }
@@ -552,12 +594,17 @@ function topbarHTML(){
     parties:['Customers & Suppliers','Manage the people and companies you trade with'],
     soa:['Statement of Account','Running balance per customer or supplier'],
     aging:['Aging Report','Outstanding balances by how overdue they are'],
+    cash:['Cash Movement','Track cash in and cash out, separate from customer/supplier documents'],
     stock:['Stock','Simple inventory tracking by item, grade and color'],
     recurring:['Recurring Invoices','Auto-generate invoices on a schedule for retainer clients'],
     settings:['Settings','Company profile, numbering, item catalog and tax defaults'],
   };
   const [t,s] = titles[route.page] || ['',''];
-  return `<div class="topbar"><div><div class="page-title">${t}</div><div class="page-sub">${s}</div></div>
+  return `<div class="topbar">
+    <div class="topbar-left">
+      <button class="hamburger-btn" id="hamburgerBtn">${icon('menu')}</button>
+      <div><div class="page-title">${t}</div><div class="page-sub">${s}</div></div>
+    </div>
     <div><button class="btn btn-primary" id="quickCreateBtn">${icon('plus')} New document</button></div></div>`;
 }
 
@@ -567,6 +614,7 @@ function pageHTML(){
   if(route.page==='parties') return partiesHTML();
   if(route.page==='soa') return soaHTML();
   if(route.page==='aging') return agingHTML();
+  if(route.page==='cash') return cashHTML();
   if(route.page==='stock') return stockHTML();
   if(route.page==='recurring') return recurringHTML();
   if(route.page==='settings') return settingsHTML();
@@ -579,13 +627,14 @@ function emptyState(title,sub){
 /* ---------- Dashboard ---------- */
 function dashboardHTML(){
   const base = state.settings.currency;
-  const recv = state.parties.filter(p=>p.type!=='supplier');
-  const supp = state.parties.filter(p=>p.type!=='customer');
-  const totalRecv = recv.reduce((s,p)=>{ const b=partyBalance(p.id, base); return s+(b>0?b:0); },0);
-  const totalPay = supp.reduce((s,p)=>{ const b=partyBalance(p.id, base); return s+(b>0?b:0); },0);
+  // Sum every party's AR / AP balance separately — a party that's both your customer and
+  // supplier contributes to both totals independently, never double-counted or netted together.
+  const totalRecv = state.parties.reduce((s,p)=>{ const b=partyBalance(p.id,'AR',base); return s+(b>0?b:0); },0);
+  const totalPay = state.parties.reduce((s,p)=>{ const b=partyBalance(p.id,'AP',base); return s+(b>0?b:0); },0);
   const otherCcyDocs = state.documents.filter(d=>!d.voided && docCurrency(d)!==base && MONEY_DOC_TYPES.includes(d.type)).length;
   const overdueDocs = state.documents.filter(d=>d.type==='INV' && !d.voided && docStatus(d)==='overdue' && docCurrency(d)===base);
   const overdueTotal = overdueDocs.reduce((s,d)=>s+docTotals(d).total - docPaidAmount(d),0);
+  const cashBalance = cashBalanceFor(base);
   const recent = [...state.documents, ...state.payments].filter(d=>!d.voided).sort((a,b)=>b.date.localeCompare(a.date) || (b.createdAt-a.createdAt)).slice(0,8);
 
   return `
@@ -593,7 +642,7 @@ function dashboardHTML(){
     <div class="stat-card"><div class="stat-label">Total Receivables (${base})</div><div class="stat-value receivable">${fmtMoney(totalRecv)}</div></div>
     <div class="stat-card"><div class="stat-label">Total Payables (${base})</div><div class="stat-value payable">${fmtMoney(totalPay)}</div></div>
     <div class="stat-card"><div class="stat-label">Overdue Invoices (${base})</div><div class="stat-value overdue">${fmtMoney(overdueTotal)}</div></div>
-    <div class="stat-card"><div class="stat-label">Documents this month</div><div class="stat-value">${state.documents.filter(d=>d.date && d.date.slice(0,7)===todayStr().slice(0,7)).length}</div></div>
+    <div class="stat-card" style="cursor:pointer" data-nav="cash"><div class="stat-label">Cash Balance (${base})</div><div class="stat-value" style="color:${cashBalance<0?'var(--danger)':'var(--success)'}">${fmtMoney(cashBalance)}</div></div>
   </div>
   ${otherCcyDocs>0? `<div class="hint" style="margin-bottom:14px;">+ ${otherCcyDocs} document(s) in other currencies — see Statement of Account or Aging Report per party for those balances.</div>`:''}
   <div class="card">
@@ -677,15 +726,17 @@ function partiesHTML(){
   </div>
   <div class="card" style="padding:0;">
     ${list.length===0 ? emptyState('No customers or suppliers yet','Add one to start creating documents against them.') : `
-    <div class="table-scroll"><table><thead><tr><th>Name</th><th>Type</th><th>Contact</th><th class="num">Balance</th><th></th></tr></thead>
+    <div class="table-scroll"><table><thead><tr><th>Name</th><th>Type</th><th>Contact</th><th class="num">Receivable</th><th class="num">Payable</th><th></th></tr></thead>
     <tbody>${list.map(p=>{
       const base = state.settings.currency;
-      const bal = partyBalance(p.id, base);
+      const ar = partyBalance(p.id, 'AR', base);
+      const ap = partyBalance(p.id, 'AP', base);
       return `<tr>
         <td style="font-weight:600;cursor:pointer" data-soa="${p.id}">${escapeHtml(p.name)}</td>
         <td><span class="party-type-tag pt-${p.type}">${p.type}</span></td>
         <td style="color:var(--text-soft)">${escapeHtml(p.phone||p.email||'—')}</td>
-        <td class="num" style="color:${bal>0?'var(--accent)':bal<0?'var(--success)':'var(--text-soft)'}">${fmtMoney(Math.abs(bal), base)}${bal<0?' CR':''}</td>
+        <td class="num" style="color:${ar>0?'var(--accent)':ar<0?'var(--success)':'var(--text-faint)'}">${ar? fmtMoney(Math.abs(ar), base)+(ar<0?' CR':'') : '—'}</td>
+        <td class="num" style="color:${ap>0?'var(--warning)':ap<0?'var(--success)':'var(--text-faint)'}">${ap? fmtMoney(Math.abs(ap), base)+(ap<0?' CR':'') : '—'}</td>
         <td style="text-align:right">
           <button class="btn btn-sm btn-ghost" data-edit-party="${p.id}">Edit</button>
           <button class="btn btn-sm btn-ghost" data-soa="${p.id}">SOA</button>
@@ -696,12 +747,36 @@ function partiesHTML(){
 }
 
 /* ---------- SOA ---------- */
+function soaLedgerSection(partyId, kind, title){
+  const grouped = ledgerRowsByCurrency(partyId, kind);
+  const currencies = Object.keys(grouped);
+  if(currencies.length===0) return '';
+  return `<div class="card" style="margin-top:14px;">
+    <div class="card-title" style="margin-bottom:12px;">${title}</div>
+    ${currencies.map(ccy=>{
+      const rows = grouped[ccy]; const bal = rows[rows.length-1].balance;
+      return `<div style="margin-bottom:18px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div style="font-weight:650;font-size:13px;">${ccy}</div>
+          <div style="font-weight:700;color:${bal<0?'var(--success)':(kind==='AP'?'var(--warning)':'var(--accent)')}">${fmtMoney(Math.abs(bal), ccy)}${bal<0?' CR':(kind==='AP'?' owing':' owed')}</div>
+        </div>
+        <div class="table-scroll"><table><thead><tr><th>Date</th><th>Reference</th><th>Description</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead>
+        <tbody>${rows.map(r=>`<tr>
+          <td>${fmtDate(r.date)}</td><td style="font-weight:600">${r.ref}</td><td>${r.desc}</td>
+          <td class="num">${r.debit? fmtMoney(r.debit, ccy):'—'}</td>
+          <td class="num">${r.credit? fmtMoney(r.credit, ccy):'—'}</td>
+          <td class="num" style="font-weight:600">${fmtMoney(r.balance, ccy)}</td>
+        </tr>`).join('')}</tbody></table></div>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
 function soaHTML(){
   const partyId = route.params.partyId || (state.parties[0] && state.parties[0].id);
   const party = partyById(partyId);
   if(!party) return emptyState('No parties yet','Add a customer or supplier first, then come back to view their statement.');
-  const grouped = ledgerRowsByCurrency(partyId);
-  const currencies = Object.keys(grouped);
+  const arSection = soaLedgerSection(partyId, 'AR', 'Receivable ledger (they owe you)');
+  const apSection = soaLedgerSection(partyId, 'AP', 'Payable ledger (you owe them)');
   return `
   <div class="toolbar">
     <div class="filters">
@@ -712,30 +787,10 @@ function soaHTML(){
     <button class="btn" id="printSoaBtn">${icon('print')} Print / Export</button>
   </div>
   <div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;">
-      <div>
-        <div style="font-weight:700;font-size:16px;">${escapeHtml(party.name)}</div>
-        <div style="color:var(--text-soft);font-size:12.5px;margin-top:2px;">${escapeHtml(party.address||'')}</div>
-      </div>
-    </div>
-    ${currencies.length===0 ? emptyState('No transactions yet','Invoices, credit/debit notes, bills and payments for this party will appear here.') :
-      currencies.map(ccy=>{
-        const rows = grouped[ccy]; const bal = rows[rows.length-1].balance;
-        return `<div style="margin-bottom:22px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-            <div style="font-weight:650;font-size:13px;">${ccy}</div>
-            <div style="font-weight:700;color:${bal<0?'var(--success)':'var(--accent)'}">${fmtMoney(Math.abs(bal), ccy)}${bal<0?' CR':' owed'}</div>
-          </div>
-          <div class="table-scroll"><table><thead><tr><th>Date</th><th>Reference</th><th>Description</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead>
-          <tbody>${rows.map(r=>`<tr>
-            <td>${fmtDate(r.date)}</td><td style="font-weight:600">${r.ref}</td><td>${r.desc}</td>
-            <td class="num">${r.debit? fmtMoney(r.debit, ccy):'—'}</td>
-            <td class="num">${r.credit? fmtMoney(r.credit, ccy):'—'}</td>
-            <td class="num" style="font-weight:600">${fmtMoney(r.balance, ccy)}</td>
-          </tr>`).join('')}</tbody></table></div>
-        </div>`;
-      }).join('')}
-  </div>`;
+    <div style="font-weight:700;font-size:16px;">${escapeHtml(party.name)}</div>
+    <div style="color:var(--text-soft);font-size:12.5px;margin-top:2px;">${escapeHtml(party.address||'')}</div>
+  </div>
+  ${(!arSection && !apSection) ? `<div class="card" style="margin-top:14px;">${emptyState('No transactions yet','Invoices, credit/debit notes, bills and payments for this party will appear here.')}</div>` : arSection + apSection}`;
 }
 
 /* ---------- Aging report ---------- */
@@ -790,6 +845,34 @@ function agingHTML(){
       </tr>
     </tbody></table></div>
     <div class="hint" style="padding:12px 16px;">Totals mix currencies if you use more than one — open a party's Statement of Account for exact per-currency figures.</div>`}
+  </div>`;
+}
+
+/* ---------- Cash Movement ---------- */
+function cashHTML(){
+  const rows = cashMovementsSorted();
+  const balances = cashBalancesByCurrency();
+  const ccys = Object.keys(balances);
+  return `
+  <div class="stat-grid" style="grid-template-columns:repeat(${Math.max(ccys.length,1)},1fr);margin-bottom:16px;">
+    ${ccys.length===0 ? `<div class="stat-card"><div class="stat-label">Cash Balance</div><div class="stat-value">${fmtMoney(0)}</div></div>` :
+      ccys.map(c=>`<div class="stat-card"><div class="stat-label">Cash Balance (${c})</div><div class="stat-value" style="color:${balances[c]<0?'var(--danger)':'var(--success)'}">${fmtMoney(balances[c],c)}</div></div>`).join('')}
+  </div>
+  <div class="toolbar">
+    <div class="hint" style="margin:0;">Cash in/out not tied to a customer or supplier document — e.g. cash sales, petty cash, owner drawings, rent, salaries.</div>
+    <button class="btn btn-primary" id="newCashBtn">${icon('plus')} New cash entry</button>
+  </div>
+  <div class="card" style="padding:0;">
+    ${rows.length===0 ? emptyState('No cash movements yet','Record your first cash in or cash out entry.') : `
+    <div class="table-scroll"><table><thead><tr><th>Date</th><th>Direction</th><th>Category</th><th>Description</th><th class="num">Amount</th><th></th></tr></thead>
+    <tbody>${rows.map(m=>`<tr>
+      <td>${fmtDate(m.date)}</td>
+      <td><span class="badge ${m.direction==='in'?'badge-paid':'badge-overdue'}">${m.direction==='in'?'Cash in':'Cash out'}</span></td>
+      <td>${escapeHtml(m.category||'—')}</td>
+      <td style="color:var(--text-soft)">${escapeHtml(m.description||'—')}</td>
+      <td class="num" style="font-weight:600;color:${m.direction==='in'?'var(--success)':'var(--danger)'}">${m.direction==='in'?'+':'−'}${fmtMoney(m.amount, m.currency)}</td>
+      <td style="text-align:right"><button class="btn btn-sm btn-ghost" data-void-cash="${m.id}">Void</button></td>
+    </tr>`).join('')}</tbody></table></div>`}
   </div>`;
 }
 
@@ -1305,6 +1388,46 @@ function openPaymentDetail(id){
   document.getElementById('voidPayBtn').onclick = async ()=>{ p.voided=!p.voided; await savePayments(); toast(p.voided?'Voided':'Restored'); closeModal(); render(); };
 }
 
+/* ================= Cash movement modal ================= */
+function openCashModal(){
+  const html = `<div class="modal-overlay" id="cashModalOverlay"><div class="modal">
+    <div class="modal-head"><div class="modal-title">New cash entry</div><button class="icon-btn" id="closeCashModal">${icon('x')}</button></div>
+    <div class="modal-body">
+      <div class="row">
+        <div class="field"><label>Direction</label><select id="cash_dir"><option value="in">Cash in</option><option value="out">Cash out</option></select></div>
+        <div class="field"><label>Date</label><input id="cash_date" type="date" value="${todayStr()}"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Category</label>
+          <select id="cash_category">${CASH_CATEGORIES.map(c=>`<option value="${escapeAttr(c)}">${escapeHtml(c)}</option>`).join('')}</select>
+        </div>
+        <div class="field"><label>Currency</label><select id="cash_currency">${state.settings.currencies.map(c=>`<option value="${c}" ${c===state.settings.currency?'selected':''}>${c}</option>`).join('')}</select></div>
+      </div>
+      <div class="field"><label>Amount</label><input id="cash_amount" type="number" step="0.01" min="0" value="0"></div>
+      <div class="field"><label>Description (optional)</label><input id="cash_desc" placeholder="e.g. cash sale to walk-in customer"></div>
+    </div>
+    <div class="modal-foot"><button class="btn" id="cancelCashBtn">Cancel</button><button class="btn btn-primary" id="saveCashBtn">Save</button></div>
+  </div></div>`;
+  injectModal(html);
+  document.getElementById('closeCashModal').onclick = closeModal;
+  document.getElementById('cancelCashBtn').onclick = closeModal;
+  document.getElementById('saveCashBtn').onclick = async ()=>{
+    const amount = Number(document.getElementById('cash_amount').value);
+    if(!amount || amount<=0){ toast('Enter a valid amount'); return; }
+    const entry = {
+      id: uid(), date: document.getElementById('cash_date').value || todayStr(),
+      direction: document.getElementById('cash_dir').value,
+      category: document.getElementById('cash_category').value,
+      currency: document.getElementById('cash_currency').value,
+      description: document.getElementById('cash_desc').value,
+      amount, voided:false, createdAt: Date.now(),
+    };
+    state.cashMovements.push(entry);
+    await saveCash();
+    toast('Cash entry saved'); closeModal(); render();
+  };
+}
+
 /* ================= Stock: manual adjustment & history ================= */
 function openStockAdjustModal(){
   const cat = state.settings.itemCatalog;
@@ -1526,20 +1649,28 @@ function printDocument(doc){
   </div>`;
   openPrintWindow(bodyHtml, doc.number);
 }
+function printSoaSection(partyId, kind, title){
+  const grouped = ledgerRowsByCurrency(partyId, kind);
+  const currencies = Object.keys(grouped);
+  if(currencies.length===0) return '';
+  return `<div style="margin-top:22px;font-weight:700;font-size:14px;">${title}</div>
+    ${currencies.map(ccy=>{ const rows = grouped[ccy]; const bal = rows[rows.length-1].balance;
+      return `<div style="margin-top:10px;font-weight:700;">${ccy}</div>
+      <table class="items"><thead><tr><th>Date</th><th>Reference</th><th>Description</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead>
+      <tbody>${rows.map(r=>`<tr><td>${fmtDate(r.date)}</td><td>${r.ref}</td><td>${r.desc}</td><td class="num">${r.debit?fmtMoney(r.debit,ccy):'—'}</td><td class="num">${r.credit?fmtMoney(r.credit,ccy):'—'}</td><td class="num">${fmtMoney(r.balance,ccy)}</td></tr>`).join('')}</tbody></table>
+      <div class="totals"><div class="grand"><span>Balance</span><span>${fmtMoney(Math.abs(bal),ccy)} ${bal<0?'CR':''}</span></div></div>`;
+    }).join('')}`;
+}
 function printSOA(partyId){
-  const s = state.settings; const party = partyById(partyId); const grouped = ledgerRowsByCurrency(partyId);
+  const s = state.settings; const party = partyById(partyId);
   const bodyHtml = `<div class="doc-paper">
     <div class="doc-paper-head">
       <div><div class="co-name">${escapeHtml(s.companyName)}</div><div class="co-detail">${escapeHtml(s.address)}<br>${escapeHtml(s.phone)} · ${escapeHtml(s.email)}</div></div>
       <div style="text-align:right;"><h1>Statement of Account</h1><div class="doc-meta-table">As at ${fmtDate(todayStr())}</div></div>
     </div>
     <div class="party-block"><div class="party-label">Account</div><div style="font-weight:700;">${escapeHtml(party.name)}</div><div>${escapeHtml(party.address||'')}</div></div>
-    ${Object.entries(grouped).map(([ccy,rows])=>{ const bal = rows[rows.length-1].balance;
-      return `<div style="margin-top:16px;font-weight:700;">${ccy}</div>
-      <table class="items"><thead><tr><th>Date</th><th>Reference</th><th>Description</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead>
-      <tbody>${rows.map(r=>`<tr><td>${fmtDate(r.date)}</td><td>${r.ref}</td><td>${r.desc}</td><td class="num">${r.debit?fmtMoney(r.debit,ccy):'—'}</td><td class="num">${r.credit?fmtMoney(r.credit,ccy):'—'}</td><td class="num">${fmtMoney(r.balance,ccy)}</td></tr>`).join('')}</tbody></table>
-      <div class="totals"><div class="grand"><span>Balance</span><span>${fmtMoney(Math.abs(bal),ccy)} ${bal<0?'CR':''}</span></div></div>`;
-    }).join('')}
+    ${printSoaSection(partyId, 'AR', 'Receivable ledger (they owe you)')}
+    ${printSoaSection(partyId, 'AP', 'Payable ledger (you owe them)')}
   </div>`;
   openPrintWindow(bodyHtml, party.name+' — Statement of Account');
 }
@@ -1564,6 +1695,15 @@ function attachGlobalHandlers(){
   const npb = document.getElementById('newPartyBtn'); if(npb) npb.onclick = ()=>openPartyModal(null);
   const nrb = document.getElementById('newRecurringBtn'); if(nrb) nrb.onclick = ()=>openRecurringModal(null);
   const asb = document.getElementById('adjustStockBtn'); if(asb) asb.onclick = ()=>openStockAdjustModal();
+  const ncb = document.getElementById('newCashBtn'); if(ncb) ncb.onclick = ()=>openCashModal();
+
+  const hb = document.getElementById('hamburgerBtn'); if(hb) hb.onclick = ()=>{ sidebarOpen = !sidebarOpen; render(); };
+  const bd = document.getElementById('sidebarBackdrop'); if(bd) bd.onclick = ()=>{ sidebarOpen = false; render(); };
+
+  document.querySelectorAll('[data-void-cash]').forEach(el=>el.addEventListener('click', async ()=>{
+    const m = state.cashMovements.find(x=>x.id===el.dataset.voidCash); if(!m) return;
+    m.voided = !m.voided; await saveCash(); toast(m.voided?'Voided':'Restored'); render();
+  }));
 
   document.querySelectorAll('[data-open]').forEach(el=>el.addEventListener('click',(e)=>{
     if(e.target.closest('[data-print]')) return;
@@ -1651,6 +1791,7 @@ async function reloadKey(key){
   else if(key==='payments') state.payments = val || [];
   else if(key==='stockMovements') state.stockMovements = val || [];
   else if(key==='recurring') state.recurring = val || [];
+  else if(key==='cashMovements') state.cashMovements = val || [];
 }
 function subscribeRealtime(){
   try{
