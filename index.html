@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Ledger — Documents & Accounts</title>
+<title>Skyco Business Suite</title>
 <style>
   :root{
     --bg:#FAFBFB; --surface:#FFFFFF; --text:#1C1C1E; --text-soft:#6E6E73; --text-faint:#9C9CA1;
@@ -265,13 +265,19 @@ const DEFAULT_ITEM_CATALOG = {
     {code:'BTL', name:"BOTTLED BIRD'S NEST"},
     {code:'OTR', name:"OTHER"},
   ],
-  grades: ['A','AB','ABC','BC','PTH','HEAVY','LUMUT','BAO','MASS'],
+  gradesByCode: {
+    RUC: ['A','AB','ABC','BC','PTH','HEAVY','LUMUT','BAO','MASS'],
+    RC:  ['3A','4A','4AX','5A','5AX','6A','6AX','7A','8A','BB','AA'],
+    FC:  ['A','AB','ABC','BC','PTH','HEAVY','LUMUT','BAO','MASS'],
+    BTL: [],
+    OTR: [],
+  },
   colors: ['WHITE','BEIGE','YELLOW','WHITE BEIGE','BEIGE YELLOW'],
   units: ['g','kg','pc','bottle'],
 };
 
 const DEFAULT_SETTINGS = {
-  companyName: "Your Company Sdn Bhd",
+  companyName: "The Skyco",
   address: "No. 1, Jalan Contoh, 41000 Klang, Selangor",
   phone: "+60 3-1234 5678",
   email: "hello@yourcompany.com",
@@ -398,6 +404,15 @@ function toast(msg){
 
 /* ================= Item catalog helpers ================= */
 function itemName(code){ const it = state.settings.itemCatalog.codes.find(c=>c.code===code); return it? it.name : code; }
+function gradesForCode(code){
+  const cat = state.settings.itemCatalog;
+  const gbc = cat.gradesByCode || {};
+  if(code && gbc[code]) return gbc[code];
+  if(!code){ // no code chosen yet — offer the union of all grades
+    const all = new Set(); Object.values(gbc).forEach(list=>(list||[]).forEach(g=>all.add(g))); return [...all];
+  }
+  return [];
+}
 function composeDesc(code, grade, color){
   if(!code) return '';
   const parts = [grade, color].filter(Boolean).join(' ');
@@ -548,6 +563,7 @@ function sidebarHTML(){
     {key:'parties', label:'Customers & Suppliers', icon:icon('users')},
     {key:'soa', label:'Statement of Account', icon:icon('list')},
     {key:'aging', label:'Aging Report', icon:icon('clock')},
+    {key:'reports', label:'Profit & Loss', icon:icon('chart')},
     {key:'cash', label:'Cash Movement', icon:icon('cash')},
     {key:'stock', label:'Stock', icon:icon('box')},
     {key:'recurring', label:'Recurring Invoices', icon:icon('repeat')},
@@ -586,6 +602,7 @@ function icon(name){
     search:'<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
     cash:'<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M6 10v.01M18 14v.01"/>',
     menu:'<path d="M3 6h18M3 12h18M3 18h18"/>',
+    chart:'<path d="M3 3v18h18"/><path d="M7 16l4-6 3 3 5-7"/>',
   };
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths[name]||''}</svg>`;
 }
@@ -597,6 +614,7 @@ function topbarHTML(){
     parties:['Customers & Suppliers','Manage the people and companies you trade with'],
     soa:['Statement of Account','Running balance per customer or supplier'],
     aging:['Aging Report','Outstanding balances by how overdue they are'],
+    reports:['Profit & Loss','Monthly and annual profit, and purchase quantity by item code'],
     cash:['Cash Movement','Track cash in and cash out, separate from customer/supplier documents'],
     stock:['Stock','Simple inventory tracking by item, grade and color'],
     recurring:['Recurring Invoices','Auto-generate invoices on a schedule for retainer clients'],
@@ -617,6 +635,7 @@ function pageHTML(){
   if(route.page==='parties') return partiesHTML();
   if(route.page==='soa') return soaHTML();
   if(route.page==='aging') return agingHTML();
+  if(route.page==='reports') return reportsHTML();
   if(route.page==='cash') return cashHTML();
   if(route.page==='stock') return stockHTML();
   if(route.page==='recurring') return recurringHTML();
@@ -638,6 +657,7 @@ function dashboardHTML(){
   const overdueDocs = state.documents.filter(d=>d.type==='INV' && !d.voided && docStatus(d)==='overdue' && docCurrency(d)===base);
   const overdueTotal = overdueDocs.reduce((s,d)=>s+docTotals(d).total - docPaidAmount(d),0);
   const cashBalance = cashBalanceFor(base);
+  const thisMonth = pnlForYear(new Date().getFullYear())[new Date().getMonth()];
   const recent = [...state.documents, ...state.payments].filter(d=>!d.voided).sort((a,b)=>b.date.localeCompare(a.date) || (b.createdAt-a.createdAt)).slice(0,8);
 
   return `
@@ -646,6 +666,7 @@ function dashboardHTML(){
     <div class="stat-card"><div class="stat-label">Total Payables (${base})</div><div class="stat-value payable">${fmtMoney(totalPay)}</div></div>
     <div class="stat-card"><div class="stat-label">Overdue Invoices (${base})</div><div class="stat-value overdue">${fmtMoney(overdueTotal)}</div></div>
     <div class="stat-card" style="cursor:pointer" data-nav="cash"><div class="stat-label">Cash & Bank Balance (${base})</div><div class="stat-value" style="color:${cashBalance<0?'var(--danger)':'var(--success)'}">${fmtMoney(cashBalance)}</div></div>
+    <div class="stat-card" style="cursor:pointer" data-nav="reports"><div class="stat-label">Net Profit — this month (${base})</div><div class="stat-value" style="color:${thisMonth.netProfit<0?'var(--danger)':'var(--success)'}">${fmtMoney(thisMonth.netProfit)}</div></div>
   </div>
   ${otherCcyDocs>0? `<div class="hint" style="margin-bottom:14px;">+ ${otherCcyDocs} document(s) in other currencies — see Statement of Account or Aging Report per party for those balances.</div>`:''}
   <div class="card">
@@ -851,6 +872,129 @@ function agingHTML(){
   </div>`;
 }
 
+/* ---------- Profit & Loss / Purchases report ---------- */
+let reportsYear = new Date().getFullYear();
+let reportsItemFilter = 'all';
+const PNL_EXCLUDE_CATEGORIES = ['Owner capital','Loan received','Owner drawings','Bank fees'];
+function monthKey(dateStr){ return (dateStr||'').slice(0,7); } // "YYYY-MM"
+function pnlForYear(year){
+  const base = state.settings.currency;
+  const months = Array.from({length:12}, (_,i)=>({
+    key: `${year}-${String(i+1).padStart(2,'0')}`, label: new Date(year,i,1).toLocaleString(undefined,{month:'short'}),
+    revenue:0, purchases:0, otherIncome:0, opEx:0,
+  }));
+  const byKey = {}; months.forEach(m=>byKey[m.key]=m);
+
+  state.documents.filter(d=>!d.voided && docCurrency(d)===base && d.date && d.date.slice(0,4)===String(year)).forEach(d=>{
+    const m = byKey[monthKey(d.date)]; if(!m) return;
+    const subtotal = docTotals(d).subtotal;
+    if(d.type==='INV' || d.type==='DN') m.revenue += subtotal;
+    else if(d.type==='CN') m.revenue -= subtotal;
+    else if(d.type==='PINV') m.purchases += subtotal;
+  });
+
+  state.cashMovements.filter(c=>!c.voided && !c.linkedPaymentId && (c.currency||base)===base && c.date && c.date.slice(0,4)===String(year)).forEach(c=>{
+    if(PNL_EXCLUDE_CATEGORIES.includes(c.category)) return;
+    const m = byKey[monthKey(c.date)]; if(!m) return;
+    if(c.direction==='in') m.otherIncome += Number(c.amount)||0;
+    else m.opEx += Number(c.amount)||0;
+  });
+
+  months.forEach(m=>{
+    m.grossProfit = m.revenue - m.purchases;
+    m.netProfit = m.grossProfit + m.otherIncome - m.opEx;
+  });
+  return months;
+}
+function purchaseQtyForYear(year){
+  const rows = {}; // itemCode -> {unit, byMonth:{1..12: qty}}
+  state.documents.filter(d=>d.type==='PINV' && !d.voided && d.date && d.date.slice(0,4)===String(year)).forEach(d=>{
+    const mIdx = Number(d.date.slice(5,7));
+    (d.items||[]).forEach(it=>{
+      if(!it.itemCode) return;
+      if(!rows[it.itemCode]) rows[it.itemCode] = { itemCode: it.itemCode, unit: it.unit||'g', byMonth: {} };
+      rows[it.itemCode].byMonth[mIdx] = (rows[it.itemCode].byMonth[mIdx]||0) + (Number(it.qty)||0);
+    });
+  });
+  return rows;
+}
+function reportsHTML(){
+  const years = new Set([reportsYear]);
+  state.documents.forEach(d=>{ if(d.date) years.add(Number(d.date.slice(0,4))); });
+  state.cashMovements.forEach(c=>{ if(c.date) years.add(Number(c.date.slice(0,4))); });
+  const yearList = [...years].sort((a,b)=>b-a);
+  const base = state.settings.currency;
+  const months = pnlForYear(reportsYear);
+  const annual = months.reduce((s,m)=>({
+    revenue:s.revenue+m.revenue, purchases:s.purchases+m.purchases, grossProfit:s.grossProfit+m.grossProfit,
+    otherIncome:s.otherIncome+m.otherIncome, opEx:s.opEx+m.opEx, netProfit:s.netProfit+m.netProfit,
+  }), {revenue:0,purchases:0,grossProfit:0,otherIncome:0,opEx:0,netProfit:0});
+
+  const qtyRows = purchaseQtyForYear(reportsYear);
+  const codes = state.settings.itemCatalog.codes.map(c=>c.code).filter(Boolean);
+  const shownCodes = reportsItemFilter==='all' ? codes : [reportsItemFilter];
+
+  return `
+  <div class="toolbar">
+    <div class="filters">
+      <select id="fReportsYear">${yearList.map(y=>`<option value="${y}" ${y===reportsYear?'selected':''}>${y}</option>`).join('')}</select>
+    </div>
+  </div>
+  <div class="hint" style="margin:-4px 0 14px;">Revenue and purchases come from Invoices/Debit/Credit Notes and Purchase Bills (${base} only, tax excluded). "Other income" and "Operating expenses" come from standalone Cash Movement entries not already tied to an invoice/bill payment, so nothing is double-counted.</div>
+
+  <div class="stat-grid">
+    <div class="stat-card"><div class="stat-label">Revenue (${reportsYear})</div><div class="stat-value receivable">${fmtMoney(annual.revenue,base)}</div></div>
+    <div class="stat-card"><div class="stat-label">Purchases (${reportsYear})</div><div class="stat-value payable">${fmtMoney(annual.purchases,base)}</div></div>
+    <div class="stat-card"><div class="stat-label">Gross Profit (${reportsYear})</div><div class="stat-value" style="color:${annual.grossProfit<0?'var(--danger)':'var(--success)'}">${fmtMoney(annual.grossProfit,base)}</div></div>
+    <div class="stat-card"><div class="stat-label">Net Profit (${reportsYear})</div><div class="stat-value" style="color:${annual.netProfit<0?'var(--danger)':'var(--success)'}">${fmtMoney(annual.netProfit,base)}</div></div>
+  </div>
+
+  <div class="card" style="padding:0;margin-bottom:20px;">
+    <div class="card-title" style="padding:16px 16px 0;">Monthly profit — ${reportsYear}</div>
+    <div class="table-scroll"><table><thead><tr><th>Month</th><th class="num">Revenue</th><th class="num">Purchases</th><th class="num">Gross Profit</th><th class="num">Other Income</th><th class="num">Op. Expenses</th><th class="num">Net Profit</th></tr></thead>
+    <tbody>${months.map(m=>`<tr>
+      <td style="font-weight:600">${m.label}</td>
+      <td class="num">${fmtMoney(m.revenue,base)}</td>
+      <td class="num">${fmtMoney(m.purchases,base)}</td>
+      <td class="num" style="color:${m.grossProfit<0?'var(--danger)':'inherit'}">${fmtMoney(m.grossProfit,base)}</td>
+      <td class="num">${fmtMoney(m.otherIncome,base)}</td>
+      <td class="num">${fmtMoney(m.opEx,base)}</td>
+      <td class="num" style="font-weight:700;color:${m.netProfit<0?'var(--danger)':'var(--success)'}">${fmtMoney(m.netProfit,base)}</td>
+    </tr>`).join('')}
+    <tr><td style="font-weight:700">Total ${reportsYear}</td>
+      <td class="num" style="font-weight:700">${fmtMoney(annual.revenue,base)}</td>
+      <td class="num" style="font-weight:700">${fmtMoney(annual.purchases,base)}</td>
+      <td class="num" style="font-weight:700">${fmtMoney(annual.grossProfit,base)}</td>
+      <td class="num" style="font-weight:700">${fmtMoney(annual.otherIncome,base)}</td>
+      <td class="num" style="font-weight:700">${fmtMoney(annual.opEx,base)}</td>
+      <td class="num" style="font-weight:700">${fmtMoney(annual.netProfit,base)}</td>
+    </tr>
+    </tbody></table></div>
+  </div>
+
+  <div class="card" style="padding:0;">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 16px 0;flex-wrap:wrap;gap:10px;">
+      <div class="card-title" style="padding:0;">Purchase quantity by item code — ${reportsYear}</div>
+      <select id="fReportsItem">
+        <option value="all" ${reportsItemFilter==='all'?'selected':''}>All item codes</option>
+        ${codes.map(c=>`<option value="${c}" ${reportsItemFilter===c?'selected':''}>${c} — ${escapeHtml(itemName(c))}</option>`).join('')}
+      </select>
+    </div>
+    <div class="hint" style="padding:8px 16px 0;">Quantities are summed as entered on Purchase Bills (RUC/RC/etc.) — keep a consistent unit per item code for the totals to be meaningful.</div>
+    ${shownCodes.every(c=>!qtyRows[c]) ? `<div style="padding:16px;">${emptyState('No purchases recorded', 'Purchase Bill line items for '+reportsYear+' will appear here.')}</div>` : `
+    <div class="table-scroll"><table><thead><tr><th>Item code</th>${Array.from({length:12},(_,i)=>`<th class="num">${new Date(reportsYear,i,1).toLocaleString(undefined,{month:'short'})}</th>`).join('')}<th class="num">Total</th></tr></thead>
+    <tbody>${shownCodes.filter(c=>qtyRows[c]).map(c=>{
+      const r = qtyRows[c];
+      const total = Object.values(r.byMonth).reduce((s,v)=>s+v,0);
+      return `<tr>
+        <td style="font-weight:600">${c} <span class="hint" style="display:inline">(${escapeHtml(itemName(c))}, ${escapeHtml(r.unit)})</span></td>
+        ${Array.from({length:12},(_,i)=>`<td class="num">${r.byMonth[i+1]? Number(r.byMonth[i+1]).toFixed(2) : '—'}</td>`).join('')}
+        <td class="num" style="font-weight:700">${total.toFixed(2)}</td>
+      </tr>`;
+    }).join('')}</tbody></table></div>`}
+  </div>`;
+}
+
 /* ---------- Cash Movement ---------- */
 let cashMethodFilter = 'all';
 function cashHTML(){
@@ -876,14 +1020,14 @@ function cashHTML(){
   <div class="card" style="padding:0;">
     ${rows.length===0 ? emptyState('No entries found','Record a money-in or money-out entry, or adjust the filter above.') : `
     <div class="table-scroll"><table><thead><tr><th>Date</th><th>Direction</th><th>Method</th><th>Category</th><th>Description</th><th class="num">Amount</th><th></th></tr></thead>
-    <tbody>${rows.map(m=>`<tr>
+    <tbody>${rows.map(m=>`<tr style="${m.voided?'opacity:.5':''}">
       <td>${fmtDate(m.date)}</td>
-      <td><span class="badge ${m.direction==='in'?'badge-paid':'badge-overdue'}">${m.direction==='in'?'In':'Out'}</span></td>
+      <td><span class="badge ${m.direction==='in'?'badge-paid':'badge-overdue'}">${m.direction==='in'?'In':'Out'}</span>${m.voided?' <span class="badge">Voided</span>':''}</td>
       <td>${escapeHtml(m.method||'Cash')}</td>
       <td>${escapeHtml(m.category||'—')}</td>
       <td style="color:var(--text-soft)">${escapeHtml(m.description||'—')}</td>
       <td class="num" style="font-weight:600;color:${m.direction==='in'?'var(--success)':'var(--danger)'}">${m.direction==='in'?'+':'−'}${fmtMoney(m.amount, m.currency)}</td>
-      <td style="text-align:right"><button class="btn btn-sm btn-ghost" data-void-cash="${m.id}">Void</button></td>
+      <td style="text-align:right;white-space:nowrap"><button class="btn btn-sm btn-ghost" data-edit-cash="${m.id}">Edit</button> <button class="btn btn-sm btn-ghost" data-void-cash="${m.id}">${m.voided?'Restore':'Void'}</button></td>
     </tr>`).join('')}</tbody></table></div>`}
   </div>`;
 }
@@ -988,9 +1132,14 @@ function settingsHTML(){
       </tr>`).join('')}</tbody></table></div>
     <button class="btn btn-sm btn-ghost" id="addCodeBtn" style="margin-top:6px;">${icon('plus')} Add item code</button>
 
-    <div style="margin-top:16px;"><label>Grades</label>
-      <div class="chip-list" id="gradeChips">${s.itemCatalog.grades.map((g,i)=>`<div class="chip">${escapeHtml(g)}<button data-rm-grade="${i}">${icon('x')}</button></div>`).join('')}</div>
-      <div class="add-chip-row"><input id="newGrade" placeholder="Add grade e.g. AB"><button class="btn btn-sm" id="addGradeBtn">Add</button></div>
+    <div style="margin-top:16px;"><label>Grades (per item code)</label>
+      <div class="hint" style="margin-bottom:8px;">Each item code has its own grade list — e.g. RUC uses A/AB/ABC..., RC uses 3A/4A/4AX...</div>
+      ${s.itemCatalog.codes.map(c=>`
+        <div style="margin-bottom:12px;">
+          <div style="font-weight:600;font-size:13px;margin-bottom:4px;">${escapeHtml(c.code||'(no code)')} <span class="hint" style="display:inline">— ${escapeHtml(c.name||'')}</span></div>
+          <div class="chip-list" id="gradeChips-${escapeAttr(c.code)}">${(s.itemCatalog.gradesByCode[c.code]||[]).map((g,i)=>`<div class="chip">${escapeHtml(g)}<button data-rm-grade="${escapeAttr(c.code)}" data-rm-grade-i="${i}">${icon('x')}</button></div>`).join('')}</div>
+          <div class="add-chip-row"><input class="newGradeInput" data-code="${escapeAttr(c.code)}" placeholder="Add grade for ${escapeAttr(c.code)}"><button class="btn btn-sm addGradeBtn" data-code="${escapeAttr(c.code)}">Add</button></div>
+        </div>`).join('')}
     </div>
 
     <div style="margin-top:16px;"><label>Colors</label>
@@ -1049,7 +1198,7 @@ function mountItemsEditor(items, getTaxRate, getCurrency, onTotalsChange){
         <td class="colCode">
           <select data-i="${i}" class="it-code">${codeOptions(it.itemCode)}</select>
           <div style="display:flex;gap:3px;margin-top:3px;">
-            <select data-i="${i}" class="it-grade" style="flex:1">${optList(cat.grades, it.grade)}</select>
+            <select data-i="${i}" class="it-grade" style="flex:1">${optList(gradesForCode(it.itemCode), it.grade)}</select>
             <select data-i="${i}" class="it-color" style="flex:1">${optList(cat.colors, it.color)}</select>
           </div>
         </td>
@@ -1420,42 +1569,63 @@ function openPaymentDetail(id){
 }
 
 /* ================= Cash movement modal ================= */
-function openCashModal(){
+function openCashModal(existingId){
+  const editing = existingId ? state.cashMovements.find(m=>m.id===existingId) : null;
+  const m = editing ? {...editing} : { direction:'in', method:'Cash', date:todayStr(), category:CASH_CATEGORIES[0], currency:state.settings.currency, amount:0, description:'' };
+  const linkedNote = editing && editing.linkedPaymentId
+    ? `<div class="hint">This entry was auto-created from a payment/receipt (${(state.payments.find(p=>p.id===editing.linkedPaymentId)||{}).number||'—'}). Editing it here only changes this cash record, not the payment itself — the two can go out of sync if you change the amount.</div>`
+    : '';
   const html = `<div class="modal-overlay" id="cashModalOverlay"><div class="modal">
-    <div class="modal-head"><div class="modal-title">New cash entry</div><button class="icon-btn" id="closeCashModal">${icon('x')}</button></div>
+    <div class="modal-head"><div class="modal-title">${editing?'Edit entry':'New cash entry'}</div><button class="icon-btn" id="closeCashModal">${icon('x')}</button></div>
     <div class="modal-body">
+      ${linkedNote}
       <div class="row">
-        <div class="field"><label>Direction</label><select id="cash_dir"><option value="in">Money in</option><option value="out">Money out</option></select></div>
-        <div class="field"><label>Method</label><select id="cash_method">${PAYMENT_METHODS.map(m=>`<option value="${m}">${m}</option>`).join('')}</select></div>
-        <div class="field"><label>Date</label><input id="cash_date" type="date" value="${todayStr()}"></div>
+        <div class="field"><label>Direction</label><select id="cash_dir"><option value="in" ${m.direction==='in'?'selected':''}>Money in</option><option value="out" ${m.direction==='out'?'selected':''}>Money out</option></select></div>
+        <div class="field"><label>Method</label><select id="cash_method">${PAYMENT_METHODS.map(mm=>`<option value="${mm}" ${mm===(m.method||'Cash')?'selected':''}>${mm}</option>`).join('')}</select></div>
+        <div class="field"><label>Date</label><input id="cash_date" type="date" value="${m.date}"></div>
       </div>
       <div class="row">
         <div class="field"><label>Category</label>
-          <select id="cash_category">${CASH_CATEGORIES.map(c=>`<option value="${escapeAttr(c)}">${escapeHtml(c)}</option>`).join('')}</select>
+          <select id="cash_category">${CASH_CATEGORIES.map(c=>`<option value="${escapeAttr(c)}" ${c===m.category?'selected':''}>${escapeHtml(c)}</option>`).join('')}</select>
         </div>
-        <div class="field"><label>Currency</label><select id="cash_currency">${state.settings.currencies.map(c=>`<option value="${c}" ${c===state.settings.currency?'selected':''}>${c}</option>`).join('')}</select></div>
+        <div class="field"><label>Currency</label><select id="cash_currency">${state.settings.currencies.map(c=>`<option value="${c}" ${c===(m.currency||state.settings.currency)?'selected':''}>${c}</option>`).join('')}</select></div>
       </div>
-      <div class="field"><label>Amount</label><input id="cash_amount" type="number" step="0.01" min="0" value="0"></div>
-      <div class="field"><label>Description (optional)</label><input id="cash_desc" placeholder="e.g. cash sale to walk-in customer"></div>
+      <div class="field"><label>Amount</label><input id="cash_amount" type="number" step="0.01" min="0" value="${Number(m.amount||0)}"></div>
+      <div class="field"><label>Description (optional)</label><input id="cash_desc" placeholder="e.g. cash sale to walk-in customer" value="${escapeAttr(m.description||'')}"></div>
     </div>
-    <div class="modal-foot"><button class="btn" id="cancelCashBtn">Cancel</button><button class="btn btn-primary" id="saveCashBtn">Save</button></div>
+    <div class="modal-foot">
+      ${editing? `<button class="btn btn-danger" id="voidCashBtn" style="margin-right:auto">${editing.voided?'Restore':'Void'}</button>`:''}
+      <button class="btn" id="cancelCashBtn">Cancel</button>
+      <button class="btn btn-primary" id="saveCashBtn">Save</button>
+    </div>
   </div></div>`;
   injectModal(html);
   document.getElementById('closeCashModal').onclick = closeModal;
   document.getElementById('cancelCashBtn').onclick = closeModal;
+  if(editing){
+    document.getElementById('voidCashBtn').onclick = async ()=>{
+      editing.voided = !editing.voided;
+      await saveCash();
+      toast(editing.voided?'Voided':'Restored'); closeModal(); render();
+    };
+  }
   document.getElementById('saveCashBtn').onclick = async ()=>{
     const amount = Number(document.getElementById('cash_amount').value);
     if(!amount || amount<=0){ toast('Enter a valid amount'); return; }
-    const entry = {
-      id: uid(), date: document.getElementById('cash_date').value || todayStr(),
+    const data = {
+      date: document.getElementById('cash_date').value || todayStr(),
       direction: document.getElementById('cash_dir').value,
       category: document.getElementById('cash_category').value,
       method: document.getElementById('cash_method').value,
       currency: document.getElementById('cash_currency').value,
       description: document.getElementById('cash_desc').value,
-      amount, voided:false, createdAt: Date.now(),
+      amount,
     };
-    state.cashMovements.push(entry);
+    if(editing){
+      Object.assign(editing, data);
+    } else {
+      state.cashMovements.push({ id: uid(), ...data, voided:false, createdAt: Date.now() });
+    }
     await saveCash();
     toast('Entry saved'); closeModal(); render();
   };
@@ -1472,7 +1642,7 @@ function openStockAdjustModal(){
         <div class="field"><label>Direction</label><select id="adj_dir"><option value="in">Stock in (+)</option><option value="out">Stock out (−)</option></select></div>
       </div>
       <div class="row">
-        <div class="field"><label>Grade</label><select id="adj_grade"><option value="">—</option>${cat.grades.map(g=>`<option value="${escapeAttr(g)}">${escapeHtml(g)}</option>`).join('')}</select></div>
+        <div class="field"><label>Grade</label><select id="adj_grade"><option value="">—</option>${gradesForCode(cat.codes[0]&&cat.codes[0].code).map(g=>`<option value="${escapeAttr(g)}">${escapeHtml(g)}</option>`).join('')}</select></div>
         <div class="field"><label>Color</label><select id="adj_color"><option value="">—</option>${cat.colors.map(g=>`<option value="${escapeAttr(g)}">${escapeHtml(g)}</option>`).join('')}</select></div>
       </div>
       <div class="row">
@@ -1487,6 +1657,10 @@ function openStockAdjustModal(){
   injectModal(html);
   document.getElementById('closeStockModal').onclick = closeModal;
   document.getElementById('cancelStockBtn').onclick = closeModal;
+  document.getElementById('adj_code').onchange = e=>{
+    const gradeSel = document.getElementById('adj_grade');
+    gradeSel.innerHTML = '<option value="">—</option>' + gradesForCode(e.target.value).map(g=>`<option value="${escapeAttr(g)}">${escapeHtml(g)}</option>`).join('');
+  };
   document.getElementById('saveStockBtn').onclick = async ()=>{
     const qty = Math.abs(Number(document.getElementById('adj_qty').value)||0);
     if(!qty){ toast('Enter a quantity'); return; }
@@ -1730,6 +1904,9 @@ function attachGlobalHandlers(){
   const asb = document.getElementById('adjustStockBtn'); if(asb) asb.onclick = ()=>openStockAdjustModal();
   const ncb = document.getElementById('newCashBtn'); if(ncb) ncb.onclick = ()=>openCashModal();
 
+  const fReportsYear = document.getElementById('fReportsYear'); if(fReportsYear) fReportsYear.onchange = e=>{ reportsYear = Number(e.target.value); render(); };
+  const fReportsItem = document.getElementById('fReportsItem'); if(fReportsItem) fReportsItem.onchange = e=>{ reportsItemFilter = e.target.value; render(); };
+
   const hb = document.getElementById('hamburgerBtn'); if(hb) hb.onclick = ()=>{ sidebarOpen = !sidebarOpen; render(); };
   const bd = document.getElementById('sidebarBackdrop'); if(bd) bd.onclick = ()=>{ sidebarOpen = false; render(); };
 
@@ -1737,6 +1914,7 @@ function attachGlobalHandlers(){
     const m = state.cashMovements.find(x=>x.id===el.dataset.voidCash); if(!m) return;
     m.voided = !m.voided; await saveCash(); toast(m.voided?'Voided':'Restored'); render();
   }));
+  document.querySelectorAll('[data-edit-cash]').forEach(el=>el.addEventListener('click', ()=>openCashModal(el.dataset.editCash)));
 
   document.querySelectorAll('[data-open]').forEach(el=>el.addEventListener('click',(e)=>{
     if(e.target.closest('[data-print]')) return;
@@ -1793,10 +1971,22 @@ function attachGlobalHandlers(){
     if(v && !state.settings.itemCatalog[arrKey].includes(v)) state.settings.itemCatalog[arrKey].push(v);
     render();
   }
-  const addGradeBtn = document.getElementById('addGradeBtn'); if(addGradeBtn) addGradeBtn.onclick = ()=>chipAdd('newGrade','grades');
   const addColorBtn = document.getElementById('addColorBtn'); if(addColorBtn) addColorBtn.onclick = ()=>chipAdd('newColor','colors');
   const addUnitBtn = document.getElementById('addUnitBtn'); if(addUnitBtn) addUnitBtn.onclick = ()=>chipAdd('newUnit','units');
-  document.querySelectorAll('[data-rm-grade]').forEach(el=>el.addEventListener('click',()=>{ state.settings.itemCatalog.grades.splice(+el.dataset.rmGrade,1); render(); }));
+  document.querySelectorAll('.addGradeBtn').forEach(el=>el.addEventListener('click',()=>{
+    const code = el.dataset.code;
+    const input = document.querySelector(`.newGradeInput[data-code="${CSS.escape(code)}"]`); if(!input) return;
+    const v = input.value.trim().toUpperCase();
+    if(!v) return;
+    if(!state.settings.itemCatalog.gradesByCode[code]) state.settings.itemCatalog.gradesByCode[code] = [];
+    if(!state.settings.itemCatalog.gradesByCode[code].includes(v)) state.settings.itemCatalog.gradesByCode[code].push(v);
+    render();
+  }));
+  document.querySelectorAll('[data-rm-grade]').forEach(el=>el.addEventListener('click',()=>{
+    const code = el.dataset.rmGrade, i = +el.dataset.rmGradeI;
+    if(state.settings.itemCatalog.gradesByCode[code]) state.settings.itemCatalog.gradesByCode[code].splice(i,1);
+    render();
+  }));
   document.querySelectorAll('[data-rm-color]').forEach(el=>el.addEventListener('click',()=>{ state.settings.itemCatalog.colors.splice(+el.dataset.rmColor,1); render(); }));
   document.querySelectorAll('[data-rm-unit]').forEach(el=>el.addEventListener('click',()=>{ state.settings.itemCatalog.units.splice(+el.dataset.rmUnit,1); render(); }));
   const saveCatalogBtn = document.getElementById('saveCatalogBtn');
