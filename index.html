@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Skyco Business Suite</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%233B5BDB'/%3E%3Cpath fill='%23fff' d='M32 14L4 34L28 30Z'/%3E%3Cpath fill='%23fff' d='M32 14L60 34L36 30Z'/%3E%3Cpath fill='%23fff' d='M32 30L24 48L32 40L40 48Z'/%3E%3C/svg%3E">
 <style>
   :root{
     --bg:#FAFBFB; --surface:#FFFFFF; --text:#1C1C1E; --text-soft:#6E6E73; --text-faint:#9C9CA1;
@@ -29,8 +30,8 @@
     display:flex; flex-direction:column; padding:18px 12px; overflow-y:auto;
   }
   .brand{display:flex;align-items:center;gap:8px;padding:4px 8px 20px;}
-  .brand-mark{width:22px;height:22px;border-radius:6px;background:var(--accent);
-    display:flex;align-items:center;justify-content:center;color:#fff;font-weight:600;font-size:12px;flex:none;}
+  .brand-mark{width:26px;height:26px;border-radius:7px;background:var(--accent);
+    display:flex;align-items:center;justify-content:center;color:#fff;font-weight:600;font-size:12px;flex:none;padding:5px;box-sizing:border-box;}
   .brand-name{font-weight:600;font-size:14.5px;letter-spacing:-0.01em;}
   .nav-group{margin-bottom:18px;}
   .nav-label{font-size:11px;color:var(--text-faint);padding:0 10px 6px;font-weight:600;letter-spacing:0.02em;}
@@ -447,6 +448,15 @@ function docStatus(doc){
   if(paid >= total - 0.005) return 'paid';
   return 'partial';
 }
+// Outstanding (not fully paid, not voided) Invoices (AR) or Purchase Bills (AP) for a party —
+// used by the bulk "knock off" payment flow so several bills can be settled in one go.
+function outstandingDocsFor(partyId, kind){
+  const type = kind==='AP' ? 'PINV' : 'INV';
+  return state.documents.filter(d=>d.partyId===partyId && d.type===type && !d.voided).map(d=>{
+    const t = docTotals(d); const paid = docPaidAmount(d); const balance = t.total - paid;
+    return { doc:d, total:t.total, paid, balance, ccy: docCurrency(d) };
+  }).filter(r=>r.balance > 0.005).sort((a,b)=>a.doc.date.localeCompare(b.doc.date));
+}
 function badgeClass(status){
   return {draft:'badge-draft', sent:'badge-sent', paid:'badge-paid', partial:'badge-partial', overdue:'badge-overdue', void:'badge-void'}[status] || 'badge-draft';
 }
@@ -552,8 +562,27 @@ function nav(page, params={}){ route = {page, params}; sidebarOpen = false; rend
 
 function render(){
   const app = document.getElementById('app');
+  // Typing in a filter/search box (e.g. the Documents search field) triggers a full
+  // re-render on every keystroke. Without this, rebuilding app.innerHTML replaces the
+  // focused <input> with a new DOM node and the browser drops focus/cursor — you'd have
+  // to re-click the field for every character typed. Capture + restore focus & cursor
+  // position around the rebuild so typing stays continuous.
+  const active = document.activeElement;
+  let focusInfo = null;
+  if(active && active.id && app.contains(active)){
+    focusInfo = { id: active.id, start: active.selectionStart, end: active.selectionEnd };
+  }
   app.innerHTML = `${sidebarHTML()}<div class="sidebar-backdrop ${sidebarOpen?'show':''}" id="sidebarBackdrop"></div><div id="main">${topbarHTML()}<div class="content">${pageHTML()}</div></div>`;
   attachGlobalHandlers();
+  if(focusInfo){
+    const el = document.getElementById(focusInfo.id);
+    if(el){
+      el.focus();
+      if(focusInfo.start!=null && typeof el.setSelectionRange==='function'){
+        try{ el.setSelectionRange(focusInfo.start, focusInfo.end); }catch(e){}
+      }
+    }
+  }
 }
 
 function sidebarHTML(){
@@ -571,7 +600,7 @@ function sidebarHTML(){
   ];
   return `
   <div id="sidebar" class="${sidebarOpen?'open':''}">
-    <div class="brand"><div class="brand-mark">${(state.settings.companyName||'C').slice(0,1)}</div><div class="brand-name">${escapeHtml(state.settings.companyName)}</div></div>
+    <div class="brand"><div class="brand-mark">${logoSVG('#fff')}</div><div class="brand-name">${escapeHtml(state.settings.companyName)}</div></div>
     <div class="nav-group">
       <div class="nav-label">Workspace</div>
       ${nav_items.map(i=>`<div class="nav-item ${route.page===i.key?'active':''}" data-nav="${i.key}">${i.icon}<span>${i.label}</span></div>`).join('')}
@@ -584,6 +613,14 @@ function sidebarHTML(){
   </div>`;
 }
 
+function logoSVG(color){
+  color = color || 'currentColor';
+  return `<svg viewBox="0 0 64 64" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
+    <path fill="${color}" d="M32 14L4 34L28 30Z"/>
+    <path fill="${color}" d="M32 14L60 34L36 30Z"/>
+    <path fill="${color}" d="M32 30L24 48L32 40L40 48Z"/>
+  </svg>`;
+}
 function icon(name){
   const paths = {
     grid:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
@@ -808,7 +845,11 @@ function soaHTML(){
         ${state.parties.slice().sort((a,b)=>a.name.localeCompare(b.name)).map(p=>`<option value="${p.id}" ${p.id===partyId?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}
       </select>
     </div>
-    <button class="btn" id="printSoaBtn">${icon('print')} Print / Export</button>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      ${outstandingDocsFor(partyId,'AR').length>1 ? `<button class="btn" id="bulkPayArBtn">${icon('cash')} Knock off receivables</button>`:''}
+      ${outstandingDocsFor(partyId,'AP').length>1 ? `<button class="btn" id="bulkPayApBtn">${icon('cash')} Knock off payables</button>`:''}
+      <button class="btn" id="printSoaBtn">${icon('print')} Print / Export</button>
+    </div>
   </div>
   <div class="card">
     <div style="font-weight:700;font-size:16px;">${escapeHtml(party.name)}</div>
@@ -1232,10 +1273,19 @@ function mountItemsEditor(items, getTaxRate, getCurrency, onTotalsChange){
     tbody.querySelectorAll('.it-desc').forEach(el=>el.addEventListener('input',e=>{
       const i=+e.target.dataset.i; items[i].desc=e.target.value; items[i]._autoDesc=false;
     }));
-    tbody.querySelectorAll('.it-qty').forEach(el=>el.addEventListener('input',e=>{ items[+e.target.dataset.i].qty=e.target.value; renderItems(); renderTotals(); }));
+    // Qty/price/discount are typed character-by-character, so on every keystroke we only
+    // patch that row's amount cell + the totals box — never rebuild the table itself.
+    // Rebuilding the <input> node on every keystroke (via renderItems()) was what forced
+    // you to re-click the cell for every digit.
+    function patchRow(el){
+      const i=+el.dataset.i;
+      const row = el.closest('tr'); const cell = row && row.querySelector('.colAmt');
+      if(cell) cell.textContent = fmtMoney(lineAmount(items[i]), getCurrency());
+    }
+    tbody.querySelectorAll('.it-qty').forEach(el=>el.addEventListener('input',e=>{ items[+e.target.dataset.i].qty=e.target.value; patchRow(e.target); renderTotals(); }));
     tbody.querySelectorAll('.it-unit').forEach(el=>el.addEventListener('change',e=>{ items[+e.target.dataset.i].unit=e.target.value; }));
-    tbody.querySelectorAll('.it-price').forEach(el=>el.addEventListener('input',e=>{ items[+e.target.dataset.i].price=e.target.value; renderItems(); renderTotals(); }));
-    tbody.querySelectorAll('.it-disc').forEach(el=>el.addEventListener('input',e=>{ items[+e.target.dataset.i].discount=e.target.value; renderItems(); renderTotals(); }));
+    tbody.querySelectorAll('.it-price').forEach(el=>el.addEventListener('input',e=>{ items[+e.target.dataset.i].price=e.target.value; patchRow(e.target); renderTotals(); }));
+    tbody.querySelectorAll('.it-disc').forEach(el=>el.addEventListener('input',e=>{ items[+e.target.dataset.i].discount=e.target.value; patchRow(e.target); renderTotals(); }));
     tbody.querySelectorAll('.it-disctype').forEach(el=>el.addEventListener('change',e=>{ items[+e.target.dataset.i].discountType=e.target.value; renderItems(); renderTotals(); }));
     tbody.querySelectorAll('[data-rm]').forEach(el=>el.addEventListener('click',e=>{ items.splice(+e.currentTarget.dataset.rm,1); renderItems(); renderTotals(); }));
   }
@@ -1520,6 +1570,124 @@ function openViewModal(id, kind){
       closeModal(); render();
     };
   }
+}
+
+/* ================= Modal: Bulk payment (knock off several bills at once) ================= */
+function openBulkPaymentModal(partyId, kind){ // kind: 'AR' = receipts from a customer, 'AP' = payments to a supplier
+  const party = partyById(partyId);
+  const rows = outstandingDocsFor(partyId, kind);
+  if(rows.length===0){ toast('Nothing outstanding for this party'); return; }
+  const ccys = [...new Set(rows.map(r=>r.ccy))];
+  let currentCcy = ccys[0];
+  const ptype = kind==='AR' ? 'RCT' : 'PMT';
+
+  function rowsForCcy(){ return rows.filter(r=>r.ccy===currentCcy); }
+  function wireRowEvents(){
+    document.querySelectorAll('.bp-check').forEach(el=>el.addEventListener('change', e=>{
+      const id = e.target.dataset.id;
+      const alloc = document.querySelector(`.bp-alloc[data-id="${id}"]`);
+      const r = rows.find(x=>x.doc.id===id);
+      if(alloc){ alloc.disabled = !e.target.checked; alloc.value = e.target.checked ? r.balance.toFixed(2) : '0.00'; }
+      updateSummary();
+    }));
+    document.querySelectorAll('.bp-alloc').forEach(el=>el.addEventListener('input', updateSummary));
+  }
+  function updateSummary(){
+    const total = [...document.querySelectorAll('.bp-alloc')].reduce((s,el)=> s + (el.disabled?0:(Number(el.value)||0)), 0);
+    const box = document.getElementById('bulkPaySummary');
+    if(box) box.textContent = `Total to record: ${fmtMoney(total, currentCcy)}`;
+  }
+  function renderTable(){
+    const list = rowsForCcy();
+    const tbody = document.getElementById('bulkPayBody');
+    if(!tbody) return;
+    tbody.innerHTML = list.map(r=>`<tr>
+      <td><input type="checkbox" class="bp-check" data-id="${r.doc.id}" checked></td>
+      <td style="font-weight:600">${r.doc.number}</td>
+      <td>${fmtDate(r.doc.date)}</td>
+      <td class="num">${fmtMoney(r.balance, r.ccy)}</td>
+      <td class="num"><input type="number" step="0.01" min="0" class="bp-alloc" data-id="${r.doc.id}" value="${r.balance.toFixed(2)}" style="width:110px;text-align:right"></td>
+    </tr>`).join('');
+    wireRowEvents(); updateSummary();
+  }
+  function autoAllocate(amount){
+    let remaining = Math.max(0, amount);
+    rowsForCcy().forEach(r=>{
+      const alloc = document.querySelector(`.bp-alloc[data-id="${r.doc.id}"]`);
+      const check = document.querySelector(`.bp-check[data-id="${r.doc.id}"]`);
+      if(!alloc || !check) return;
+      const take = Math.max(0, Math.min(r.balance, remaining));
+      alloc.value = take.toFixed(2);
+      alloc.disabled = take<=0;
+      check.checked = take>0;
+      remaining -= take;
+    });
+    updateSummary();
+  }
+
+  const totalOutstanding = rowsForCcy().reduce((s,r)=>s+r.balance,0);
+  const html = `<div class="modal-overlay" id="bulkPayOverlay"><div class="modal wide">
+    <div class="modal-head"><div class="modal-title">Knock off ${kind==='AR'?'receivables':'payables'} — ${escapeHtml(party.name)}</div><button class="icon-btn" id="closeBulkPay">${icon('x')}</button></div>
+    <div class="modal-body">
+      <div class="row">
+        <div class="field"><label>Date</label><input id="bp_date" type="date" value="${todayStr()}"></div>
+        <div class="field"><label>Method</label><select id="bp_method"><option>Bank Transfer</option><option>Cash</option><option>Cheque</option><option>Online</option></select></div>
+        ${ccys.length>1 ? `<div class="field"><label>Currency</label><select id="bp_ccy">${ccys.map(c=>`<option value="${c}">${c}</option>`).join('')}</select></div>` : ''}
+      </div>
+      <div class="row">
+        <div class="field"><label>${kind==='AR'?'Amount received':'Amount paid'}</label><input id="bp_amount" type="number" step="0.01" min="0" value="${totalOutstanding.toFixed(2)}"></div>
+        <div class="field" style="justify-content:flex-end;"><label>&nbsp;</label><button class="btn btn-sm" id="bp_autoBtn" type="button">Auto-allocate, oldest first</button></div>
+      </div>
+      <div class="hint" style="margin:4px 0 10px;">Tick which bills to include, or type an amount straight into "Allocate" for any bill — unticking a bill zeroes it out. "Auto-allocate" fills the oldest bills first up to the amount above.</div>
+      <div class="table-scroll"><table><thead><tr><th></th><th>Number</th><th>Date</th><th class="num">Balance</th><th class="num">Allocate</th></tr></thead>
+      <tbody id="bulkPayBody"></tbody></table></div>
+      <div id="bulkPaySummary" style="margin-top:10px;font-weight:700;"></div>
+    </div>
+    <div class="modal-foot"><button class="btn" id="cancelBulkPay">Cancel</button><button class="btn btn-primary" id="saveBulkPay">Record payments</button></div>
+  </div></div>`;
+  injectModal(html);
+  renderTable();
+  document.getElementById('closeBulkPay').onclick = closeModal;
+  document.getElementById('cancelBulkPay').onclick = closeModal;
+  document.getElementById('bp_autoBtn').onclick = ()=> autoAllocate(Number(document.getElementById('bp_amount').value)||0);
+  const bpCcy = document.getElementById('bp_ccy');
+  if(bpCcy) bpCcy.onchange = e=>{
+    currentCcy = e.target.value;
+    document.getElementById('bp_amount').value = rowsForCcy().reduce((s,r)=>s+r.balance,0).toFixed(2);
+    renderTable();
+  };
+
+  document.getElementById('saveBulkPay').onclick = async ()=>{
+    const allocations = rowsForCcy().map(r=>{
+      const el = document.querySelector(`.bp-alloc[data-id="${r.doc.id}"]`);
+      const amt = el && !el.disabled ? Number(el.value)||0 : 0;
+      return { r, amt };
+    }).filter(x=>x.amt > 0.005);
+    if(allocations.length===0){ toast('Allocate an amount to at least one bill'); return; }
+    for(const a of allocations){ if(a.amt - a.r.balance > 0.005){ toast(`${a.r.doc.number}: allocation can't exceed its balance`); return; } }
+
+    const btn = document.getElementById('saveBulkPay'); btn.disabled = true; btn.textContent = 'Recording…';
+    const date = document.getElementById('bp_date').value || todayStr();
+    const method = document.getElementById('bp_method').value;
+    const newPayments = [], newCash = [];
+    try{
+      for(const a of allocations){
+        const number = await getNextNumber(ptype);
+        const pay = { id:uid(), type:ptype, number, date, partyId, amount:a.amt, currency:currentCcy, method, linkedDocId:a.r.doc.id, voided:false, createdAt:Date.now() };
+        const cashEntry = { id:uid(), date, direction: ptype==='RCT'?'in':'out',
+          category: ptype==='RCT'?'Sales receipt':'Supplier payment', method,
+          currency: currentCcy, description: `${pay.number} — ${party.name} (${a.r.doc.number})`,
+          amount: a.amt, voided:false, createdAt: Date.now(), linkedPaymentId: pay.id };
+        pay.linkedCashId = cashEntry.id;
+        newPayments.push(pay); newCash.push(cashEntry);
+      }
+    }catch(e){ btn.disabled = false; btn.textContent = 'Record payments'; toast('Something went wrong getting the next number — try again'); return; }
+    state.payments.push(...newPayments);
+    state.cashMovements.push(...newCash);
+    await Promise.all([savePayments(), saveCash()]);
+    toast(`${allocations.length} bill(s) knocked off — ${fmtMoney(allocations.reduce((s,a)=>s+a.amt,0), currentCcy)} recorded`);
+    closeModal(); render();
+  };
 }
 
 function emailDocLink(doc){
@@ -1827,8 +1995,11 @@ function printDocument(doc){
   const s = state.settings; const party = partyById(doc.partyId); const t = docTotals(doc); const ccy = docCurrency(doc);
   const bodyHtml = `<div class="doc-paper">
     <div class="doc-paper-head">
-      <div><div class="co-name">${escapeHtml(s.companyName)}</div>
+      <div style="display:flex;gap:10px;align-items:flex-start;">
+        <div style="width:34px;height:34px;border-radius:8px;background:#3B5BDB;display:flex;align-items:center;justify-content:center;padding:6px;box-sizing:border-box;flex:none;">${logoSVG('#fff')}</div>
+        <div><div class="co-name">${escapeHtml(s.companyName)}</div>
         <div class="co-detail">${escapeHtml(s.address)}<br>${escapeHtml(s.phone)} · ${escapeHtml(s.email)}<br>${escapeHtml(s.regNoNew)} ${s.regNoOld?'/ '+escapeHtml(s.regNoOld):''}</div></div>
+      </div>
       <div style="text-align:right;">
         <h1>${DOC_LABELS[doc.type]}</h1>
         <table class="doc-meta-table" style="margin-left:auto;">
@@ -1872,7 +2043,10 @@ function printSOA(partyId){
   const s = state.settings; const party = partyById(partyId);
   const bodyHtml = `<div class="doc-paper">
     <div class="doc-paper-head">
-      <div><div class="co-name">${escapeHtml(s.companyName)}</div><div class="co-detail">${escapeHtml(s.address)}<br>${escapeHtml(s.phone)} · ${escapeHtml(s.email)}</div></div>
+      <div style="display:flex;gap:10px;align-items:flex-start;">
+        <div style="width:34px;height:34px;border-radius:8px;background:#3B5BDB;display:flex;align-items:center;justify-content:center;padding:6px;box-sizing:border-box;flex:none;">${logoSVG('#fff')}</div>
+        <div><div class="co-name">${escapeHtml(s.companyName)}</div><div class="co-detail">${escapeHtml(s.address)}<br>${escapeHtml(s.phone)} · ${escapeHtml(s.email)}</div></div>
+      </div>
       <div style="text-align:right;"><h1>Statement of Account</h1><div class="doc-meta-table">As at ${fmtDate(todayStr())}</div></div>
     </div>
     <div class="party-block"><div class="party-label">Account</div><div style="font-weight:700;">${escapeHtml(party.name)}</div><div>${escapeHtml(party.address||'')}</div></div>
@@ -1937,6 +2111,8 @@ function attachGlobalHandlers(){
 
   const soaSel = document.getElementById('soaPartySelect'); if(soaSel) soaSel.onchange=e=>nav('soa',{partyId:e.target.value});
   const printSoaBtn = document.getElementById('printSoaBtn'); if(printSoaBtn) printSoaBtn.onclick=()=>printSOA(route.params.partyId || state.parties[0].id);
+  const bulkPayArBtn = document.getElementById('bulkPayArBtn'); if(bulkPayArBtn) bulkPayArBtn.onclick=()=>openBulkPaymentModal(route.params.partyId || state.parties[0].id, 'AR');
+  const bulkPayApBtn = document.getElementById('bulkPayApBtn'); if(bulkPayApBtn) bulkPayApBtn.onclick=()=>openBulkPaymentModal(route.params.partyId || state.parties[0].id, 'AP');
 
   const saveCompanyBtn = document.getElementById('saveCompanyBtn');
   if(saveCompanyBtn) saveCompanyBtn.onclick = async ()=>{
