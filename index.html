@@ -290,6 +290,7 @@ const DEFAULT_SETTINGS = {
   taxRate: 6,
   currency: "RM",
   currencies: ["RM","USD","SGD","CNY","EUR","GBP","IDR"],
+  paymentMethods: ["Cash","Bank Transfer","Cheque","Online","Cash Deposit"],
   docTypes: {
     QT:   { label: "Quotation",       prefix: "QT",   next: 1 },
     PO:   { label: "Purchase Order",  prefix: "PO",   next: 1 },
@@ -505,7 +506,10 @@ function allSkusInUse(){
 // not just physical cash. "Method" (below) records which one; the balance is their combined total.
 const CASH_CATEGORIES = ['Sales receipt','Owner capital','Loan received','Petty cash top-up','Other income',
   'Supplier payment','Rent','Utilities','Salary/Wages','Transport/Delivery','Owner drawings','Bank fees','Other expense'];
-const PAYMENT_METHODS = ['Cash','Bank Transfer','Cheque','Online'];
+function paymentMethods(){
+  const list = state.settings.paymentMethods;
+  return (list && list.length) ? list : ['Cash','Bank Transfer','Cheque','Online'];
+}
 function cashMovementsSorted(){ return [...state.cashMovements].filter(m=>!m.voided).sort((a,b)=> b.date.localeCompare(a.date) || (b.createdAt-a.createdAt)); }
 function cashBalanceFor(currency){
   currency = currency || state.settings.currency;
@@ -1052,7 +1056,7 @@ function cashHTML(){
     <div class="filters">
       <select id="fCashMethod">
         <option value="all" ${cashMethodFilter==='all'?'selected':''}>All methods</option>
-        ${PAYMENT_METHODS.map(m=>`<option value="${m}" ${cashMethodFilter===m?'selected':''}>${m}</option>`).join('')}
+        ${paymentMethods().map(m=>`<option value="${m}" ${cashMethodFilter===m?'selected':''}>${m}</option>`).join('')}
       </select>
     </div>
     <button class="btn btn-primary" id="newCashBtn">${icon('plus')} New entry</button>
@@ -1193,6 +1197,14 @@ function settingsHTML(){
       <div class="add-chip-row"><input id="newUnit" placeholder="Add unit e.g. kg"><button class="btn btn-sm" id="addUnitBtn">Add</button></div>
     </div>
     <button class="btn btn-primary" id="saveCatalogBtn" style="margin-top:16px;">Save item catalog</button>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Payment methods</div>
+    <div class="hint" style="margin-bottom:10px;">Used when recording a receipt/payment, a bulk knock-off, or a Cash Movement entry.</div>
+    <div class="chip-list" id="methodChips">${paymentMethods().map((m,i)=>`<div class="chip">${escapeHtml(m)}<button data-rm-method="${i}">${icon('x')}</button></div>`).join('')}</div>
+    <div class="add-chip-row"><input id="newMethod" placeholder="Add method e.g. Cash Deposit"><button class="btn btn-sm" id="addMethodBtn">Add</button></div>
+    <button class="btn btn-primary" id="saveMethodsBtn" style="margin-top:16px;">Save payment methods</button>
   </div>
 
   <div class="card">
@@ -1513,7 +1525,7 @@ function openViewModal(id, kind){
           <div class="row">
             <div class="field"><label>Date</label><input id="pay_date" type="date" value="${todayStr()}"></div>
             <div class="field"><label>Amount</label><input id="pay_amount" type="number" step="0.01" value="${Math.max(0,(t.total-paid)).toFixed(2)}"></div>
-            <div class="field"><label>Method</label><select id="pay_method"><option>Bank Transfer</option><option>Cash</option><option>Cheque</option><option>Online</option></select></div>
+            <div class="field"><label>Method</label><select id="pay_method">${paymentMethods().map(m=>`<option value="${escapeAttr(m)}">${escapeHtml(m)}</option>`).join('')}</select></div>
           </div>
           <button class="btn btn-primary btn-sm" id="recordPayBtn">Record</button>
         </div>
@@ -1631,7 +1643,7 @@ function openBulkPaymentModal(partyId, kind){ // kind: 'AR' = receipts from a cu
     <div class="modal-body">
       <div class="row">
         <div class="field"><label>Date</label><input id="bp_date" type="date" value="${todayStr()}"></div>
-        <div class="field"><label>Method</label><select id="bp_method"><option>Bank Transfer</option><option>Cash</option><option>Cheque</option><option>Online</option></select></div>
+        <div class="field"><label>Method</label><select id="bp_method">${paymentMethods().map(m=>`<option value="${escapeAttr(m)}">${escapeHtml(m)}</option>`).join('')}</select></div>
         ${ccys.length>1 ? `<div class="field"><label>Currency</label><select id="bp_ccy">${ccys.map(c=>`<option value="${c}">${c}</option>`).join('')}</select></div>` : ''}
       </div>
       <div class="row">
@@ -1749,7 +1761,7 @@ function openCashModal(existingId){
       ${linkedNote}
       <div class="row">
         <div class="field"><label>Direction</label><select id="cash_dir"><option value="in" ${m.direction==='in'?'selected':''}>Money in</option><option value="out" ${m.direction==='out'?'selected':''}>Money out</option></select></div>
-        <div class="field"><label>Method</label><select id="cash_method">${PAYMENT_METHODS.map(mm=>`<option value="${mm}" ${mm===(m.method||'Cash')?'selected':''}>${mm}</option>`).join('')}</select></div>
+        <div class="field"><label>Method</label><select id="cash_method">${paymentMethods().map(mm=>`<option value="${escapeAttr(mm)}" ${mm===(m.method||'Cash')?'selected':''}>${escapeHtml(mm)}</option>`).join('')}</select></div>
         <div class="field"><label>Date</label><input id="cash_date" type="date" value="${m.date}"></div>
       </div>
       <div class="row">
@@ -2167,6 +2179,22 @@ function attachGlobalHandlers(){
   document.querySelectorAll('[data-rm-unit]').forEach(el=>el.addEventListener('click',()=>{ state.settings.itemCatalog.units.splice(+el.dataset.rmUnit,1); render(); }));
   const saveCatalogBtn = document.getElementById('saveCatalogBtn');
   if(saveCatalogBtn) saveCatalogBtn.onclick = async ()=>{ await saveSettings(); toast('Item catalog saved'); render(); };
+
+  const addMethodBtn = document.getElementById('addMethodBtn');
+  if(addMethodBtn) addMethodBtn.onclick = ()=>{
+    const el = document.getElementById('newMethod'); if(!el) return;
+    const v = el.value.trim(); if(!v) return;
+    if(!state.settings.paymentMethods) state.settings.paymentMethods = paymentMethods().slice();
+    if(!state.settings.paymentMethods.includes(v)) state.settings.paymentMethods.push(v);
+    render();
+  };
+  document.querySelectorAll('[data-rm-method]').forEach(el=>el.addEventListener('click',()=>{
+    if(!state.settings.paymentMethods) state.settings.paymentMethods = paymentMethods().slice();
+    state.settings.paymentMethods.splice(+el.dataset.rmMethod,1);
+    render();
+  }));
+  const saveMethodsBtn = document.getElementById('saveMethodsBtn');
+  if(saveMethodsBtn) saveMethodsBtn.onclick = async ()=>{ await saveSettings(); toast('Payment methods saved'); render(); };
 }
 
 /* ================= Boot ================= */
