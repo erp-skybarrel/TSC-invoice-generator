@@ -738,6 +738,12 @@ function documentsHTML(){
   if(docFilter.q) docs = docs.filter(d=> (d.number+partyName(d.partyId)).toLowerCase().includes(docFilter.q.toLowerCase()));
   docs.sort((a,b)=>b.date.localeCompare(a.date));
 
+  // Subtotal of whatever's currently filtered/searched, grouped by currency (docs can be
+  // in more than one currency, so a single sum could be misleading).
+  const subtotals = {};
+  docs.forEach(d=>{ const ccy = docCurrency(d); subtotals[ccy] = (subtotals[ccy]||0) + docTotals(d).total; });
+  const subCcys = Object.keys(subtotals);
+
   return `
   <div class="toolbar">
     <div class="filters">
@@ -767,7 +773,11 @@ function documentsHTML(){
         <td><span class="badge ${badgeClass(status)}">${status}</span></td>
         <td style="text-align:right"><button class="btn btn-sm btn-ghost" data-print="${d.id}">${icon('print')}</button></td>
       </tr>`;
-    }).join('')}</tbody></table></div>`}
+    }).join('')}</tbody></table></div>
+    <div style="padding:12px 16px;border-top:1px solid var(--border-soft);display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap;">
+      <span class="hint" style="margin:0;">${docs.length} document${docs.length===1?'':'s'}</span>
+      <div style="display:flex;gap:18px;font-weight:700;">${subCcys.map(c=>`<span>Subtotal (${c}): ${fmtMoney(subtotals[c],c)}</span>`).join('')}</div>
+    </div>`}
   </div>`;
 }
 
@@ -777,6 +787,9 @@ function partiesHTML(){
   let list = [...state.parties];
   if(partyFilter!=='all') list = list.filter(p=>p.type===partyFilter || p.type==='both');
   list.sort((a,b)=>a.name.localeCompare(b.name));
+  const base = state.settings.currency;
+  const subAr = list.reduce((s,p)=>{ const b=partyBalance(p.id,'AR',base); return s+(b>0?b:0); },0);
+  const subAp = list.reduce((s,p)=>{ const b=partyBalance(p.id,'AP',base); return s+(b>0?b:0); },0);
   return `
   <div class="toolbar">
     <div class="filters">
@@ -807,7 +820,14 @@ function partiesHTML(){
           <button class="btn btn-sm btn-ghost" data-soa="${p.id}">SOA</button>
         </td>
       </tr>`;
-    }).join('')}</tbody></table></div>`}
+    }).join('')}</tbody></table></div>
+    <div style="padding:12px 16px;border-top:1px solid var(--border-soft);display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap;">
+      <span class="hint" style="margin:0;">${list.length} part${list.length===1?'y':'ies'}</span>
+      <div style="display:flex;gap:18px;font-weight:700;">
+        <span>Subtotal Receivable (${base}): ${fmtMoney(subAr,base)}</span>
+        <span>Subtotal Payable (${base}): ${fmtMoney(subAp,base)}</span>
+      </div>
+    </div>`}
   </div>`;
 }
 
@@ -1047,6 +1067,17 @@ function cashHTML(){
   const balances = cashBalancesByCurrency();
   const ccys = Object.keys(balances);
   if(cashMethodFilter!=='all') rows = rows.filter(m=>(m.method||'Cash')===cashMethodFilter);
+
+  // Subtotal for whatever's currently filtered (excludes voided entries), grouped by
+  // currency, so filtering to e.g. "Cheque" shows exactly what moved by that method.
+  const subtotals = {};
+  rows.filter(m=>!m.voided).forEach(m=>{
+    const c = m.currency || state.settings.currency;
+    if(!subtotals[c]) subtotals[c] = {in:0, out:0};
+    subtotals[c][m.direction==='in'?'in':'out'] += Number(m.amount)||0;
+  });
+  const subCcys = Object.keys(subtotals);
+
   return `
   <div class="stat-grid" style="grid-template-columns:repeat(${Math.max(ccys.length,1)},1fr);margin-bottom:16px;">
     ${ccys.length===0 ? `<div class="stat-card"><div class="stat-label">Total Balance</div><div class="stat-value">${fmtMoney(0)}</div></div>` :
@@ -1073,7 +1104,13 @@ function cashHTML(){
       <td style="color:var(--text-soft)">${escapeHtml(m.description||'—')}</td>
       <td class="num" style="font-weight:600;color:${m.direction==='in'?'var(--success)':'var(--danger)'}">${m.direction==='in'?'+':'−'}${fmtMoney(m.amount, m.currency)}</td>
       <td style="text-align:right;white-space:nowrap"><button class="btn btn-sm btn-ghost" data-edit-cash="${m.id}">Edit</button> <button class="btn btn-sm btn-ghost" data-void-cash="${m.id}">${m.voided?'Restore':'Void'}</button></td>
-    </tr>`).join('')}</tbody></table></div>`}
+    </tr>`).join('')}</tbody></table></div>
+    <div style="padding:12px 16px;border-top:1px solid var(--border-soft);display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap;">
+      <span class="hint" style="margin:0;">${rows.length} entr${rows.length===1?'y':'ies'}</span>
+      <div style="display:flex;gap:18px;font-weight:700;flex-wrap:wrap;">
+        ${subCcys.map(c=>`<span>In (${c}): <span style="color:var(--success)">+${fmtMoney(subtotals[c].in,c)}</span> &nbsp; Out (${c}): <span style="color:var(--danger)">−${fmtMoney(subtotals[c].out,c)}</span> &nbsp; Net: ${fmtMoney(subtotals[c].in-subtotals[c].out,c)}</span>`).join('')}
+      </div>
+    </div>`}
   </div>`;
 }
 
